@@ -9,6 +9,7 @@ class ConsumablePresenter extends Presenter
 {
     /**
      * Json Column Layout for bootstrap table
+     *
      * @return string
      */
     public static function dataTableLayout()
@@ -21,8 +22,15 @@ class ConsumablePresenter extends Presenter
                 'switchable' => true,
                 'title' => trans('general.id'),
                 'visible' => false,
-            ],
-            [
+            ], [
+                'field' => 'name',
+                'searchable' => true,
+                'sortable' => true,
+                'switchable' => false,
+                'title' => trans('general.name'),
+                'visible' => true,
+                'formatter' => 'consumablesLinkFormatter',
+            ], [
                 'field' => 'company',
                 'searchable' => true,
                 'sortable' => true,
@@ -31,15 +39,7 @@ class ConsumablePresenter extends Presenter
                 'visible' => false,
                 'formatter' => 'companiesLinkObjFormatter',
             ],
-            [
-                'field' => 'name',
-                'searchable' => true,
-                'sortable' => true,
-                'switchable' => false,
-                'title' => trans('general.name'),
-                'visible' => true,
-                'formatter' => 'consumablesLinkFormatter',
-            ],
+
             [
                 'field' => 'image',
                 'searchable' => false,
@@ -68,11 +68,38 @@ class ConsumablePresenter extends Presenter
                 'sortable' => true,
                 'title' => trans('general.model_no'),
             ], [
+                'field' => 'location',
+                'searchable' => true,
+                'sortable' => true,
+                'title' => trans('general.location'),
+                'formatter' => 'locationsLinkObjFormatter',
+            ], [
                 'field' => 'item_no',
                 'searchable' => true,
                 'sortable' => true,
                 'title' => trans('admin/consumables/general.item_no'),
-            ],  [
+            ], [
+
+                'field' => 'manufacturer',
+                'searchable' => true,
+                'sortable' => true,
+                'title' => trans('general.manufacturer'),
+                'visible' => false,
+                'formatter' => 'manufacturersLinkObjFormatter',
+            ], [
+                'field' => 'order_number',
+                'searchable' => true,
+                'sortable' => true,
+                'title' => trans('general.order_number'),
+                'visible' => true,
+            ], [
+                'field' => 'purchase_date',
+                'searchable' => true,
+                'sortable' => true,
+                'title' => trans('general.purchase_date'),
+                'visible' => true,
+                'formatter' => 'dateDisplayFormatter',
+            ], [
                 'field' => 'min_amt',
                 'searchable' => false,
                 'sortable' => true,
@@ -97,37 +124,26 @@ class ConsumablePresenter extends Presenter
                 'class' => 'text-right text-padding-number-cell',
                 'footerFormatter' => 'qtySumFormatter',
             ], [
-                'field' => 'location',
-                'searchable' => true,
-                'sortable' => true,
-                'title' => trans('general.location'),
-                'formatter' => 'locationsLinkObjFormatter',
-            ], [
-                'field' => 'manufacturer',
-                'searchable' => true,
-                'sortable' => true,
-                'title' => trans('general.manufacturer'),
-                'visible' => false,
-                'formatter' => 'manufacturersLinkObjFormatter',
-            ], [
-                'field' => 'order_number',
-                'searchable' => true,
-                'sortable' => true,
-                'title' => trans('general.order_number'),
+                'field' => 'percent_remaining',
+                'searchable' => false,
+                'sortable' => false,
+                'switchable' => true,
+                'title' => '% ' . trans('general.remaining'),
                 'visible' => true,
-            ], [
-                'field' => 'purchase_date',
-                'searchable' => true,
-                'sortable' => true,
-                'title' => trans('general.purchase_date'),
-                'visible' => true,
-                'formatter' => 'dateDisplayFormatter',
+                'formatter' => 'progressBarFormatter',
             ], [
                 'field' => 'purchase_cost',
                 'searchable' => true,
                 'sortable' => true,
-                'title' => trans('general.purchase_cost'),
+                'title' => trans('general.unit_cost'),
                 'visible' => true,
+                'class' => 'text-right text-padding-number-cell',
+                'footerFormatter' => 'sumFormatter',
+            ], [
+                'field' => 'total_cost',
+                'searchable' => true,
+                'sortable' => true,
+                'title' => trans('general.total_cost'),
                 'footerFormatter' => 'sumFormatterQuantity',
                 'class' => 'text-right text-padding-number-cell',
             ], [
@@ -144,7 +160,7 @@ class ConsumablePresenter extends Presenter
                 'title' => trans('general.created_by'),
                 'visible' => false,
                 'formatter' => 'usersLinkObjFormatter',
-            ],[
+            ], [
                 'field' => 'created_at',
                 'searchable' => false,
                 'sortable' => true,
@@ -165,6 +181,7 @@ class ConsumablePresenter extends Presenter
                 'visible' => true,
                 'title' => trans('general.change'),
                 'formatter' => 'consumablesInOutFormatter',
+                'printIgnore' => true,
             ], [
                 'field' => 'actions',
                 'searchable' => false,
@@ -173,7 +190,60 @@ class ConsumablePresenter extends Presenter
                 'title' => trans('table.actions'),
                 'visible' => true,
                 'formatter' => 'consumablesActionsFormatter',
+                'printIgnore' => true,
+                'class' => 'hidden-print',
             ],
+        ];
+
+        return json_encode($layout);
+    }
+
+    public static function checkedOut()
+    {
+        $layout = [
+
+            [
+                'field' => 'avatar',
+                'searchable' => false,
+                'sortable' => false,
+                'title' => trans('general.image'),
+                'visible' => true,
+                'formatter' => 'imageFormatter',
+            ],
+            [
+                'field' => 'user',
+                'searchable' => false,
+                'sortable' => false,
+                'title' => trans('general.name'),
+                'visible' => true,
+                'formatter' => 'usersLinkObjFormatter',
+            ],
+            [
+                'field' => 'created_at',
+                'searchable' => false,
+                'sortable' => false,
+                'title' => trans('general.date'),
+                'visible' => true,
+                'formatter' => 'dateDisplayFormatter',
+            ],
+
+            [
+                'field' => 'note',
+                'searchable' => false,
+                'sortable' => false,
+                'title' => trans('general.notes'),
+                'visible' => true,
+            ],
+
+            [
+                'field' => 'created_by',
+                'searchable' => false,
+                'sortable' => false,
+                'title' => trans('general.created_by'),
+                'visible' => true,
+                'formatter' => 'usersLinkObjFormatter',
+            ],
+
         ];
 
         return json_encode($layout);
@@ -181,6 +251,7 @@ class ConsumablePresenter extends Presenter
 
     /**
      * Url to view this item.
+     *
      * @return string
      */
     public function viewUrl()
@@ -190,10 +261,11 @@ class ConsumablePresenter extends Presenter
 
     /**
      * Generate html link to this items name.
+     *
      * @return string
      */
     public function nameUrl()
     {
-        return (string) link_to_route('consumables.show', e($this->name), $this->id);
+        return '<a href="'.route('consumables.show', $this->id).'">'.e($this->name).'</a>';
     }
 }

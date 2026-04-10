@@ -11,14 +11,14 @@ use Tests\TestCase;
 
 class DeleteAssetTest extends TestCase
 {
-    public function testPermissionNeededToDeleteAsset()
+    public function test_permission_needed_to_delete_asset()
     {
         $this->actingAs(User::factory()->create())
             ->delete(route('hardware.destroy', Asset::factory()->create()))
             ->assertForbidden();
     }
 
-    public function testCanDeleteAsset()
+    public function test_can_delete_asset()
     {
         $asset = Asset::factory()->create();
 
@@ -30,7 +30,7 @@ class DeleteAssetTest extends TestCase
         $this->assertSoftDeleted($asset);
     }
 
-    public function testActionLogEntryMadeWhenAssetDeleted()
+    public function test_action_log_entry_made_when_asset_deleted()
     {
         $actor = User::factory()->deleteAssets()->create();
 
@@ -48,7 +48,30 @@ class DeleteAssetTest extends TestCase
         ]);
     }
 
-    public function testAssetIsCheckedInWhenDeleted()
+    public function test_action_logs_action_date_is_populated_when_asset_deleted()
+    {
+        $actor = User::factory()->deleteAssets()->create();
+
+        $asset = Asset::factory()->create();
+
+        $this->actingAs($actor)->delete(route('hardware.destroy', $asset));
+
+        $asset->refresh();
+
+        $this->assertDatabaseHas('action_logs', [
+            'action_date' => $asset->updated_at,
+            'created_at' => $asset->updated_at,
+            'created_by' => $actor->id,
+            'action_type' => 'delete',
+            'target_id' => null,
+            'target_type' => null,
+            'item_type' => Asset::class,
+            'item_id' => $asset->id,
+        ]);
+
+    }
+
+    public function test_asset_is_checked_in_when_deleted()
     {
         Event::fake();
 
@@ -65,10 +88,14 @@ class DeleteAssetTest extends TestCase
             'Asset still assigned to user after deletion'
         );
 
+        $asset->refresh();
+        $this->assertNull($asset->assigned_to);
+        $this->assertNull($asset->assigned_type);
+
         Event::assertDispatched(CheckoutableCheckedIn::class);
     }
 
-    public function testImageIsDeletedWhenAssetDeleted()
+    public function test_image_is_deleted_when_asset_deleted()
     {
         Storage::fake('public');
 

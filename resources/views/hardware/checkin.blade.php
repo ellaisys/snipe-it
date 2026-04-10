@@ -41,6 +41,27 @@
                                         @endif
                                         {{csrf_field()}}
 
+                                        @if ($asset->company)
+                                            <!-- accessory name -->
+                                            <div class="form-group">
+                                                <label class="col-sm-3 control-label">{{ trans('general.company') }}</label>
+                                                <div class="col-md-6">
+                                                    <p class="form-control-static">{!! $asset->company->present()->formattedNameLink  !!}</p>
+                                                </div>
+                                            </div>
+                                        @endif
+
+
+                                        @if ($asset->model->category)
+                                            <!-- category name -->
+                                            <div class="form-group">
+                                                <label class="col-sm-3 control-label">{{ trans('general.category') }}</label>
+                                                <div class="col-md-6">
+                                                    <p class="form-control-static">{!! $asset->model->category->present()->formattedNameLink  !!}</p>
+                                                </div>
+                                            </div>
+                                        @endif
+
                                         <!-- AssetModel name -->
                                         <div class="form-group">
                                             <label for="model" class="col-sm-3 control-label">
@@ -106,11 +127,11 @@
                                         <div class="form-group">
                                             <div class="col-md-9 col-md-offset-3">
                                                 <label class="form-control">
-                                                    {{ Form::radio('update_default_location', '1', old('update_default_location'), ['checked'=> 'checked', 'aria-label'=>'update_default_location']) }}
+                                                    <input name="update_default_location" type="radio" value="1" checked="checked" aria-label="update_default_location" />
                                                     {{ trans('admin/hardware/form.asset_location') }}
                                                 </label>
                                                 <label class="form-control">
-                                                    {{ Form::radio('update_default_location', '0', old('update_default_location'), ['aria-label'=>'update_default_location']) }}
+                                                    <input name="update_default_location" type="radio" value="0" aria-label="update_default_location" />
                                                     {{ trans('admin/hardware/form.asset_location_update_default_current') }}
                                                 </label>
                                             </div>

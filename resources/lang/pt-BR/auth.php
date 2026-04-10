@@ -1,6 +1,6 @@
 <?php
 
-return array(
+return [
 
     /*
     |--------------------------------------------------------------------------
@@ -15,6 +15,6 @@ return array(
 
     'failed' => 'Credenciais inválidas.',
     'password' => 'A senha fornecida está incorreta.',
-    'throttle' => 'Too many login attempts. Please try again in :minutes minute(s).',
+    'throttle' => 'Muitas tentativas de login. Por favor, tente novamente em :minutes minuto(s).',
 
-);
+];

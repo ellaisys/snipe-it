@@ -107,6 +107,8 @@
                         <tr>
                             <th>{{ trans('general.asset_tag') }}</th>
                             <th>{{ trans('general.bulkaudit_status') }}</th>
+                            <th>{{ trans('general.status') }}</th>
+                            <th>{{ trans('general.notes') }}</th>
                             <th></th>
                         </tr>
                         <tr id="audit-loader" style="display: none;">
@@ -140,6 +142,7 @@
 
             var form = $("#audit-form").get(0);
             var formData = $('#audit-form').serializeArray();
+            var asset_tag = $('#asset_tag').val();
 
             $.ajax({
                 url: "{{ route('api.asset.audit.legacy') }}",
@@ -151,22 +154,23 @@
                 dataType : 'json',
                 data : formData,
                 success : function (data) {
-                    if (data.status == 'success') {
-                        $('#audited tbody').prepend("<tr class='success'><td>" + data.payload.asset_tag + "</td><td>" + data.messages + "</td><td><i class='fas fa-check text-success' style='font-size:18px;'></i></td></tr>");
 
-                        @if ($user->enable_sounds)
+                    if (data.status == 'success') {
+                        $('#audited tbody').prepend("<tr class='success'><td>" + data.payload.asset_tag + "</td><td>" + data.messages + "</td><td>" + data.payload.status_label + " (" + data.payload.status_type + ")</td><td>" + data.payload.note + "</td><td><i class='fas fa-check text-success' style='font-size:18px;'></i></td></tr>");
+
+                        @if ($user?->enable_sounds)
                         var audio = new Audio('{{ config('app.url') }}/sounds/success.mp3');
                         audio.play()
                         @endif
 
                         incrementOnSuccess();
                     } else {
-                        handleAuditFail(data);
+                        handleAuditFail(data, asset_tag);
                     }
                     $('input#asset_tag').val('');
                 },
                 error: function (data) {
-                    handleAuditFail(data);
+                    handleAuditFail(data, asset_tag);
                 },
                 complete: function() {
                     $('#audit-loader').hide();
@@ -177,22 +181,29 @@
             return false;
         });
 
-        function handleAuditFail (data) {
-            @if ($user->enable_sounds)
+        function handleAuditFail (data, asset_tag) {
+            @if ($user?->enable_sounds)
             var audio = new Audio('{{ config('app.url') }}/sounds/error.mp3');
             audio.play()
             @endif
-            if (data.asset_tag) {
-                var asset_tag = data.asset_tag;
-            } else {
-                var asset_tag = '';
+
+
+            if ((!asset_tag) && (data.payload)  && (data.payload.asset_tag)) {
+                asset_tag = data.payload.asset_tag;
             }
-            if (data.messages) {
-                var messages = data.messages;
-            } else {
-                var messages = '';
+
+            asset_tag = jQuery('<span>' + asset_tag + '</span>').text();
+
+            let messages = "";
+
+            // Loop through the error messages
+            if ((data.messages)  && (data.messages)) {
+                for (let x in data.messages) {
+                    messages += data.messages[x];
+                }
             }
-            $('#audited tbody').prepend("<tr class='danger'><td>" + data.payload.asset_tag + "</td><td>" + messages + "</td><td><i class='fas fa-times text-danger' style='font-size:18px;'></i></td></tr>");
+
+            $('#audited tbody').prepend("<tr class='danger'><td>" + asset_tag + "</td><td>" + messages + "</td><td></td><td></td><td><i class='fas fa-times text-danger' style='font-size:18px;'></i></td></tr>");
         }
 
         function incrementOnSuccess() {
