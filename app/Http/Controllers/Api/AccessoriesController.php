@@ -14,6 +14,7 @@ use App\Http\Transformers\ActionlogsTransformer;
 use App\Http\Transformers\SelectlistTransformer;
 use App\Models\Accessory;
 use App\Models\AccessoryCheckout;
+use App\Models\Company;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -84,23 +85,23 @@ class AccessoriesController extends Controller
         }
 
         if ($request->filled('category_id')) {
-            $accessories->where('category_id', '=', $request->input('category_id'));
+            $accessories->where('accessories.category_id', '=', $request->input('category_id'));
         }
 
         if ($request->filled('manufacturer_id')) {
-            $accessories->where('manufacturer_id', '=', $request->input('manufacturer_id'));
+            $accessories->where('accessories.manufacturer_id', '=', $request->input('manufacturer_id'));
         }
 
         if ($request->filled('supplier_id')) {
-            $accessories->where('supplier_id', '=', $request->input('supplier_id'));
+            $accessories->where('accessories.supplier_id', '=', $request->input('supplier_id'));
         }
 
         if ($request->filled('location_id')) {
-            $accessories->where('location_id', '=', $request->input('location_id'));
+            $accessories->where('accessories.location_id', '=', $request->input('location_id'));
         }
 
         if ($request->filled('notes')) {
-            $accessories->where('notes', '=', $request->input('notes'));
+            $accessories->where('accessories.notes', '=', $request->input('notes'));
         }
 
         // Make sure the offset and limit are actually integers and do not exceed system limits
@@ -155,6 +156,7 @@ class AccessoriesController extends Controller
     {
         $accessory = new Accessory;
         $accessory->fill($request->all());
+        $accessory->company_id = Company::getIdForCurrentUser($request->input('company_id'));
         $accessory = $request->handleImages($accessory);
 
         if ($accessory->save()) {
@@ -248,6 +250,7 @@ class AccessoriesController extends Controller
         $this->authorize('update', Accessory::class);
         $accessory = Accessory::findOrFail($id);
         $accessory->fill($request->all());
+        $accessory->company_id = Company::getIdForCurrentUser($request->input('company_id'));
         $accessory = $request->handleImages($accessory);
 
         if ($accessory->save()) {
@@ -405,11 +408,11 @@ class AccessoriesController extends Controller
     public function history(Request $request, Accessory $accessory): JsonResponse|array
     {
         $this->authorize('history', $accessory);
-        $history = $accessory->getHistory($request);
-        $total = $accessory->getHistory($request)->count();
+        $historyQuery = $accessory->getHistory($request);
+        $total = (clone $historyQuery)->count();
         $offset = ($request->input('offset') > $total) ? $total : app('api_offset_value');
         $limit = app('api_limit_value');
-        $history = $history->skip($offset)->take($limit)->get();
+        $history = (clone $historyQuery)->skip($offset)->take($limit)->get();
 
         return response()->json((new ActionlogsTransformer)->transformActionlogs($history, $total), 200, ['Content-Type' => 'application/json;charset=utf8'], JSON_UNESCAPED_UNICODE);
     }
