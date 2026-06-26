@@ -2,10 +2,6 @@
 
 namespace App\Models;
 
-use ArieTimmerman\Laravel\SCIMServer\Exceptions\SCIMException;
-use ArieTimmerman\Laravel\SCIMServer\Helper;
-use ArieTimmerman\Laravel\SCIMServer\Parser\Path;
-use ArieTimmerman\Laravel\SCIMServer\SCIM\Schema;
 use ArieTimmerman\Laravel\SCIMServer\Attribute\Attribute;
 use ArieTimmerman\Laravel\SCIMServer\Attribute\Collection;
 use ArieTimmerman\Laravel\SCIMServer\Attribute\Complex;
@@ -15,9 +11,11 @@ use ArieTimmerman\Laravel\SCIMServer\Attribute\JSONCollection;
 use ArieTimmerman\Laravel\SCIMServer\Attribute\Meta;
 use ArieTimmerman\Laravel\SCIMServer\Attribute\MutableCollection;
 use ArieTimmerman\Laravel\SCIMServer\Attribute\Schema as AttributeSchema;
+use ArieTimmerman\Laravel\SCIMServer\Exceptions\SCIMException;
+use ArieTimmerman\Laravel\SCIMServer\Parser\Parser;
+use ArieTimmerman\Laravel\SCIMServer\Parser\Path;
+use ArieTimmerman\Laravel\SCIMServer\SCIM\Schema;
 use Illuminate\Database\Eloquent\Model;
-use ArieTimmerman\Laravel\SCIMServer\Attribute\AttributeMapping;
-use ArieTimmerman\Laravel\SCIMServer\SCIMConfig;
 
 function a($name = null): Attribute
 {
@@ -34,13 +32,140 @@ function eloquent($name, $attribute = null): Attribute
     return new Eloquent($name, $attribute);
 }
 
-class EloquentWithRemove extends Eloquent
+// Extends Complex to handle schema-qualified attribute keys in PATCH add/replace operations.
+// Azure Entra ID sends PATCH without a "path" field, putting the full URN as the value dict key
+// e.g. {"op":"add","value":{"urn:...grokability...:location":"Head Office"}}.
+// The upstream library's add() only searches the default (core) schema, silently dropping grokability attrs.
+class SnipeRootComplex extends Complex
 {
-    public function remove($value, Model &$object, Path $path = null)
+    private function findInSchema(string $schemaUrn, string $attrName): ?object
     {
-        $object->{$this->attribute} = null;
+        $schemaNode = $this->getSubNode($schemaUrn);
+
+        return ($schemaNode instanceof AttributeSchema) ? $schemaNode->getSubNode($attrName) : null;
     }
 
+    public function add($value, Model &$object)
+    {
+        $match = false;
+        $this->dirty = true;
+
+        if ($this->mutability == 'readOnly') {
+            return;
+        }
+
+        foreach ($value as $key => $v) {
+            if (is_numeric($key)) {
+                throw new SCIMException('Invalid key: '.$key.' for complex object '.$this->getFullKey());
+            }
+
+            $path = Parser::parse($key);
+
+            if ($path->isNotEmpty()) {
+                $attributeNames = $path->getAttributePathAttributes();
+                $schema = $path->getAttributePath()?->path?->schema;
+                $path = $path->shiftAttributePathAttributes();
+
+                $subNode = ($schema !== null) ? $this->findInSchema($schema, $attributeNames[0]) : null;
+                if ($subNode === null) {
+                    $subNode = $this->getSubNode($attributeNames[0]);
+                }
+
+                $match = true;
+
+                $newValue = $v;
+                if ($path->isNotEmpty()) {
+                    $newValue = [implode('.', $path->getAttributePathAttributes()) => $v];
+                }
+
+                if ($subNode !== null) {
+                    $subNode->add($newValue, $object);
+                }
+            }
+        }
+
+        if (! $match && $this->parent == null) {
+            foreach ($this->subAttributes as $attribute) {
+                if ($attribute instanceof AttributeSchema) {
+                    $attribute->add($value, $object);
+                }
+            }
+        }
+    }
+
+    public function replace($value, Model &$object, ?Path $path = null, $removeIfNotSet = false)
+    {
+        $this->dirty = true;
+
+        if ($this->mutability == 'readOnly') {
+            return;
+        }
+
+        foreach ($value as $key => $v) {
+            if (is_numeric($key)) {
+                throw new SCIMException('Invalid key: '.$key.' for complex object '.$this->getFullKey());
+            }
+
+            $subNode = null;
+            $path = null;
+            $key = trim($key);
+
+            if (strpos($key, ':') !== false) {
+                $parsed = Parser::parse($key);
+                $schemaUrn = $parsed->getAttributePath()?->path?->schema;
+                $attrName = $parsed->getAttributePathAttributes()[0] ?? null;
+                if ($schemaUrn !== null && $attrName !== null) {
+                    $subNode = $this->findInSchema($schemaUrn, $attrName);
+                }
+                if ($subNode === null) {
+                    $subNode = $this->getSubNode($key);
+                }
+            } else {
+                $path = Parser::parse($key);
+                if ($path->isNotEmpty()) {
+                    $attributeNames = $path->getAttributePathAttributes();
+                    $path = $path->shiftAttributePathAttributes();
+                    $subNode = $this->getSubNode($attributeNames[0] ?? $path->getAttributePath()?->path?->schema);
+                }
+            }
+
+            if ($subNode !== null) {
+                $newValue = $v;
+                if ($path !== null && $path->isNotEmpty()) {
+                    $newValue = [implode('.', $path->getAttributePathAttributes()) => $v];
+                }
+                $subNode->replace($newValue, $object, $path);
+            }
+        }
+
+        if ($subNode == null && $this->parent == null) {
+            foreach ($this->subAttributes as $attribute) {
+                if ($attribute instanceof AttributeSchema) {
+                    $attribute->replace($value, $object, $path);
+                }
+            }
+        }
+
+        if ($removeIfNotSet) {
+            foreach ($this->subAttributes as $attribute) {
+                if (! $attribute->isDirty()) {
+                    $attribute->remove(null, $object);
+                }
+            }
+        }
+    }
+}
+
+// Azure Entra ID sends op=replace with path=members and only the single user being provisioned,
+// not the full member list. Using sync() would wipe all other members on every user update.
+// Override replace() to use syncWithoutDetaching() so it behaves like add(); op=remove with a
+// filter path still handles explicit removals correctly.
+class SnipeMutableCollection extends MutableCollection
+{
+    public function replace($value, Model &$object, ?Path $path = null)
+    {
+        $this->add($value, $object);
+    }
 }
 
 class MappedTable extends Attribute
@@ -50,8 +175,8 @@ class MappedTable extends Attribute
         private string $relationship_name,
         private string $relationship_class,
         private string $relationship_id_field,
-        private string $relationship_field)
-    {
+        private string $relationship_field
+    ) {
         parent::__construct($this->scim_attribute_name);
     }
 
@@ -70,52 +195,92 @@ class MappedTable extends Attribute
         $object->{$this->relationship_id_field} = $value ? $this->relationship_class::firstOrCreate([$this->relationship_field => $value])->id : null;
     }
 
-    public function patch($operation, $value, Model &$object, Path $path = null, $removeIfNotSet = false)
+    public function patch($operation, $value, Model &$object, ?Path $path = null, $removeIfNotSet = false)
     {
         $object->{$this->relationship_id_field} = $value ? $this->relationship_class::firstOrCreate([$this->relationship_field => $value])->id : null;
     }
-
 }
 
-class UpdatableComplex extends Complex
+// Company is stored only in the company_user pivot, not company_id. Read from the pivot
+// and sync it on write. For new users (not yet saved) defer the sync via a saved() callback.
+class SCIMCompanyAttribute extends MappedTable
 {
-
-    public function doWrite($operation, $subop, $value, Model &$object, Path $path = null, $removeIfNotSet = false)
+    protected function doRead(&$object, $attributes = [])
     {
-        throw new \Exception("doWrite is not implemented yet for Operation: $operation " . ($subop ? "($subop)" : "") . "on attribute " . $this->getFullKey());
+        return $object->companies->first()?->name;
+    }
+
+    private function applyCompany(?int $companyId, Model &$object): void
+    {
+        $ids = $companyId ? [$companyId] : [];
+
+        if ($object->exists) {
+            $object->companies()->sync($ids);
+        } else {
+            $object->saved(fn () => $object->companies()->sync($ids));
+        }
     }
 
     public function add($value, Model &$object)
     {
-        $this->doWrite("add", null, $value, $object);
+        $this->applyCompany($value ? Company::firstOrCreate(['name' => $value])->id : null, $object);
     }
 
-    public function replace($value, Model &$object, Path $path = null, $removeIfNotSet = false)
+    public function replace($value, Model &$object, $path = null, $removeIfNotSet = false)
     {
-        $this->doWrite("replace", null, $value, $object, $path, $removeIfNotSet);
+        $this->applyCompany($value ? Company::firstOrCreate(['name' => $value])->id : null, $object);
     }
 
-    public function patch($operation, $value, Model &$object, Path $path = null, $removeIfNotSet = false)
+    public function patch($operation, $value, Model &$object, ?Path $path = null, $removeIfNotSet = false)
     {
-        $this->doWrite("patch", $operation, $value, $object, $path, $removeIfNotSet);
-    }
-
-    public function remove($value, Model &$object, Path $path = null)
-    {
-        $this->doWrite("remove", null, null, $object, $path);
+        $this->applyCompany($value ? Company::firstOrCreate(['name' => $value])->id : null, $object);
     }
 }
 
+class EloquentWithRemove extends Eloquent
+{
+    public function remove($value, Model &$object, ?Path $path = null)
+    {
+        $object->{$this->attribute} = null;
+    }
+}
+
+class UpdatableComplex extends Complex
+{
+    public function doWrite($operation, $subop, $value, Model &$object, ?Path $path = null, $removeIfNotSet = false)
+    {
+        throw new \Exception("doWrite is not implemented yet for Operation: $operation ".($subop ? "($subop)" : '').'on attribute '.$this->getFullKey());
+    }
+
+    public function add($value, Model &$object)
+    {
+        $this->doWrite('add', null, $value, $object);
+    }
+
+    public function replace($value, Model &$object, ?Path $path = null, $removeIfNotSet = false)
+    {
+        $this->doWrite('replace', null, $value, $object, $path, $removeIfNotSet);
+    }
+
+    public function patch($operation, $value, Model &$object, ?Path $path = null, $removeIfNotSet = false)
+    {
+        $this->doWrite('patch', $operation, $value, $object, $path, $removeIfNotSet);
+    }
+
+    public function remove($value, Model &$object, ?Path $path = null)
+    {
+        $this->doWrite('remove', null, null, $object, $path);
+    }
+}
 
 class SnipeSCIMConfig
 {
-    public function __construct()
-    {
-    }
+    public function __construct() {}
 
     public function getConfigForResource($name)
     {
         $result = $this->getConfig();
+
         return @$result[$name];
     }
 
@@ -125,6 +290,7 @@ class SnipeSCIMConfig
     }
 
     const ENTERPRISE = 'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User';
+
     const GROKABILITY = 'urn:ietf:params:scim:schemas:extension:grokability:2.0:User';
 
     public function getUserConfig()
@@ -139,22 +305,20 @@ class SnipeSCIMConfig
             'withRelations' => [],
             'description' => 'User Account',
 
-            'map' => complex()->withSubAttributes(
-                new class ('schemas', [
-                    "urn:ietf:params:scim:schemas:core:2.0:User",
-                    self::ENTERPRISE,
-                    self::GROKABILITY
-                ]) extends Constant {
+            'map' => (new SnipeRootComplex)->withSubAttributes(
+                new class('schemas', ['urn:ietf:params:scim:schemas:core:2.0:User', self::ENTERPRISE, self::GROKABILITY]) extends Constant
+                {
                     public function replace($value, &$object, $path = null)
                     {
                         // do nothing
                         $this->dirty = true;
                     }
                 },
-                (new class ('id', null) extends Constant { // TODO - this 'id' is in the same namespace for objects OR groups?
+                (new class('id', null) extends Constant // TODO - this 'id' is in the same namespace for objects OR groups?
+                {
                     protected function doRead(&$object, $attributes = [])
                     {
-                        return (string)$object->id;
+                        return (string) $object->id;
                     }
 
                     public function remove($value, &$object, $path = null)
@@ -166,102 +330,122 @@ class SnipeSCIMConfig
                 new Meta('Users'),
                 (new AttributeSchema(Schema::SCHEMA_USER, true))->withSubAttributes(
                     eloquent('userName', 'username')->ensure('required'),
-                    (new class ('active', 'activated') extends Eloquent {
+                    (new class('active', 'activated') extends Eloquent
+                    {
                         protected function doRead(&$object, $attributes = [])
                         {
-                            return (bool)$object->activated; // need this extension to force boolean-ness
+                            return (bool) $object->activated; // need this extension to force boolean-ness
                         }
                     }),
                     complex('name')->withSubAttributes(
                         eloquent('givenName', 'first_name')->ensure('required'),
                         eloquent('familyName', 'last_name'),
                     ), //     ->ensure('required'),  It *is* a bit weird, but I would've thought 'name' is required since 'givenName' is required? But apparently not?
-                    eloquent('displayName', 'display_name'), //yes, this is *not* under 'name' - that's the spec
-                    //eloquent('password')->ensure('nullable')->setReturned('never'),
+                    eloquent('displayName', 'display_name'), // yes, this is *not* under 'name' - that's the spec
+                    // eloquent('password')->ensure('nullable')->setReturned('never'),
                     eloquent('externalId', 'scim_externalid'),
 
                     // Email chonk
-                    (new class ('emails') extends UpdatableComplex {
+                    (new class('emails') extends UpdatableComplex
+                    {
                         protected function doRead(&$object, $attributes = [])
                         {
                             return collect([$object->email])->map(function ($email) {
                                 return [
                                     'value' => $email,
-                                    'type' => 'work', //TODO - is this how we always have done it?
-                                    'primary' => true
+                                    'type' => 'work', // TODO - is this how we always have done it?
+                                    'primary' => true,
                                 ];
                             })->toArray();
                         }
 
-                        public function doWrite($operation, $subop, $value, Model &$object, Path $path = null, $removeIfNotSet = false)
+                        public function doWrite($operation, $subop, $value, Model &$object, ?Path $path = null, $removeIfNotSet = false)
                         {
                             if ($value) {
-                                $object->email = $value[0]['value'];
+                                try {
+                                    if (is_string($value)) {
+                                        $object->email = $value; // Weird MS-SCIM stuff :/
+                                    } else {
+                                        $object->email = $value[0]['value'];
+                                    }
+                                } catch (\Throwable $e) {
+                                    \Log::debug($e);
+                                    throw new SCIMException("Unknown email object:  '".print_r($value, true)."'", 422);
+                                }
                             } else {
                                 $object->email = null;
                             }
                         }
                     })->withSubAttributes(
-                        eloquent('value', 'email')->ensure('email', 'nullable'), //Weird, this 'needs' nullable to work?
+                        eloquent('value', 'email')->ensure('email', 'nullable'), // Weird, this 'needs' nullable to work?
                         new Constant('type', 'work'),
                         (new Constant('primary', true))->ensure('boolean')
                     )->ensure('array')
                         ->setMultiValued(true),
 
                     // phone chonk
-                    (new class ('phoneNumbers') extends UpdatableComplex {
+                    (new class('phoneNumbers') extends UpdatableComplex
+                    {
                         protected function doRead(&$object, $attributes = [])
                         {
                             $phones = [];
                             if ($object->phone) {
                                 $phones[] = [
                                     'value' => $object->phone,
-                                    'type' => 'work'
+                                    'type' => 'work',
                                 ];
 
                             }
                             if ($object->mobile) {
                                 $phones[] = [
                                     'value' => $object->mobile,
-                                    'type' => 'mobile'
+                                    'type' => 'mobile',
                                 ];
                             }
+
                             return $phones;
                         }
 
-                        public function doWrite($operation, $subop, $value, Model &$object, Path $path = null, $removeIfNotSet = false)
+                        public function doWrite($operation, $subop, $value, Model &$object, ?Path $path = null, $removeIfNotSet = false)
                         {
-                            \Log::debug("Phones 'value' is: " . print_r($value, true));
-                            if ($operation == "patch") {
-                                if ($path->getValuePathFilter() != null) {
-                                    if ((string)$path == 'phoneNumbers[type eq "mobile"].value') {
-                                        $object->mobile = $value; //I don't know why the value is the raw value, but it is?
-                                        return;
+                            \Log::debug("Phones 'value' is: ".print_r($value, true));
+                            try {
+                                if ($operation == 'patch') {
+                                    if ($path->getValuePathFilter() != null) {
+                                        if ((string) $path == 'phoneNumbers[type eq "mobile"].value') {
+                                            $object->mobile = $value; // I don't know why the value is the raw value, but it is?
+
+                                            return;
+                                        }
+                                        if ((string) $path == 'phoneNumbers[type eq "work"].value') {
+                                            $object->phone = $value; // similar, don't know why, but it is
+
+                                            return;
+                                        }
                                     }
-                                    if ((string)$path == 'phoneNumbers[type eq "work"].value') {
-                                        $object->phone = $value; //similar, don't know why, but it is
-                                        return;
+                                    parent::patch($subop, $value, $object, $path, $removeIfNotSet);
+
+                                    return;
+                                }
+                                foreach ($value as $phone) {
+                                    switch ($phone['type']) {
+                                        case 'work':
+                                            $object->phone = $phone['value'];
+                                            break;
+
+                                        case 'mobile':
+                                            $object->mobile = $phone['value'];
+                                            break;
+
+                                        default:
+                                            throw new SCIMException("Unknown phone type '".@$phone['type']."'", 400);
                                     }
                                 }
-                                parent::patch($subop, $value, $object, $path, $removeIfNotSet);
-                                return;
-                            }
-                            foreach ($value as $phone) {
-                                switch ($phone['type']) {
-                                    case 'work':
-                                        $object->phone = $phone['value'];
-                                        break;
-
-                                    case 'mobile':
-                                        $object->mobile = $phone['value'];
-                                        break;
-
-                                    default:
-                                        throw new SCIMException("Unknown phone type '" . @$phone['type'] . "'", 400);
-                                }
+                            } catch (\Throwable $e) {
+                                \Log::debug($e);
+                                throw new SCIMException("Unknown phone object(s) '".print_r($value, true)."'", 422);
                             }
                         }
-
                     })->withSubAttributes( // TODO: I suspect these 'sub-attributes' aren't being checked at all
                         (new Constant('value', 'email'))->ensure('string'), // TODO - this is WRONG, but it works somehow? Probably because it's ignored
                         new Constant('type', 'other'), // TODO uh, *also* wrong? but, again, seems to be ignored
@@ -269,13 +453,14 @@ class SnipeSCIMConfig
                         ->setMultiValued(true),
 
                     // addresses chonk
-                    (new class ('addresses') extends UpdatableComplex {
-                        static $addressmap = [
+                    (new class('addresses') extends UpdatableComplex
+                    {
+                        public static $addressmap = [
                             'streetAddress' => 'address',
                             'locality' => 'city',
                             'region' => 'state',
                             'postalCode' => 'zip',
-                            'country' => 'country'
+                            'country' => 'country',
                         ];
 
                         protected function doRead(&$object, $attributes = [])
@@ -290,10 +475,11 @@ class SnipeSCIMConfig
                                 $address['type'] = 'work';
                                 $address['primary'] = true;
                             }
-                            return $address;
+
+                            return [$address];
                         }
 
-                        public function doWrite($operation, $subop, $value, Model &$object, Path $path = null, $removeIfNotSet = false)
+                        public function doWrite($operation, $subop, $value, Model &$object, ?Path $path = null, $removeIfNotSet = false)
                         {
                             // TODO - this is validated *just* for 'patch' operations, so this may not work in other write contexts
                             if ($path->getValuePathFilter() != null) {
@@ -301,24 +487,23 @@ class SnipeSCIMConfig
                                 // get the part of the $path that we actually care about - something like:
                                 // addresses[type eq "work"]
                                 $matches = null;
-                                if (!preg_match('/^.+\[type eq "([a-zA-Z]+)"](?:\.([a-zA-Z]+))?$/', (string)$path, $matches)) {
-                                    throw new SCIMException("Unknown path type '$path'")->setCode(422);
+                                if (! preg_match('/^.+\[type eq "([a-zA-Z]+)"](?:\.([a-zA-Z]+))?$/', (string) $path, $matches)) {
+                                    throw new SCIMException("Unknown path type '$path'", 422);
                                 }
                                 $type = $matches[1];
                                 if ($type != 'work') {
-                                    throw new SCIMException("Unknown object type '$type'")->setCode(422);
+                                    throw new SCIMException("Unknown object type '$type'", 422);
                                 }
                                 $attribute = array_key_exists(2, $matches) ? $matches[2] : null;
                                 if (array_key_exists($attribute, self::$addressmap)) {
                                     $object->{self::$addressmap[$attribute]} = $value;
+
                                     return;
                                 }
 
-
-                                throw new SCIMException("Could not handle path for update $path")->setCode(422);
+                                throw new SCIMException("Could not handle path for update $path", 422);
                             }
                         }
-
                     })->withSubAttributes(
                         eloquent('streetAddress', 'address'),
                         eloquent('locality', 'city'),
@@ -334,14 +519,15 @@ class SnipeSCIMConfig
                     eloquent('preferredLanguage', 'locale'),
                     (new Collection('groups'))->withSubAttributes(
                         eloquent('value', 'id'),
-                        (new class ('$ref') extends Eloquent {
+                        (new class('$ref') extends Eloquent
+                        {
                             protected function doRead(&$object, $attributes = [])
                             {
                                 return route(
                                     'scim.resource',
                                     [
                                         'resourceType' => 'Group',
-                                        'resourceObject' => $object->id ?? "not-saved"
+                                        'resourceObject' => $object->id ?? 'not-saved',
                                     ]
                                 );
                             }
@@ -358,14 +544,16 @@ class SnipeSCIMConfig
                 (new AttributeSchema(self::ENTERPRISE, false))->withSubAttributes(
                     eloquent('employeeNumber', 'employee_num')->ensure('nullable'),
                     new MappedTable('department', 'department', Department::class, 'department_id', 'name'),
-                    (new class('manager') extends UpdatableComplex {
+                    (new class('manager') extends UpdatableComplex
+                    {
                         protected function doRead(&$object, $attributes = [])
                         {
-                            if (!$object->manager) {
+                            if (! $object->manager) {
                                 return null;
                             }
+
                             return [
-                                'value' => $object->manager->id, //TODO - ID's aren't unique like they're supposed to be :/
+                                'value' => $object->manager->id, // TODO - ID's aren't unique like they're supposed to be :/
                                 '$ref' => route('scim.resource', ['resourceType' => 'User', 'resourceObject' => $object->manager->id]),
                                 'displayName' => $object->manager->display_name,
                             ];
@@ -373,10 +561,12 @@ class SnipeSCIMConfig
 
                         public function doWrite($operation, $subop, $value, Model &$object, $path = null, $removeIfNotSet = false)
                         {
-                            \Log::debug("What type of value is value? " . gettype($value));
+                            \Log::debug('What type of value is value? '.gettype($value));
                             $manager_id = null;
-                            if (is_scalar($value)) {
-                                \Log::debug("Weird Microsoft mode - set manager to the \$value and move on with life?");
+                            if (is_null($value)) {
+                                // nothing to do
+                            } elseif (is_scalar($value)) {
+                                \Log::debug('Weird Microsoft mode - set manager to the $value and move on with life?');
                                 $manager_id = $value;
                             } elseif (array_key_exists('$ref', $value)) {
                                 // Here's the spec: https://datatracker.ietf.org/doc/html/rfc7643#section-4.3
@@ -386,8 +576,8 @@ class SnipeSCIMConfig
 
                                 // extract ID from URL, jam it in?
                                 $url = $value['$ref'];
-                                $users_prefix = route('scim.resources', ['resourceType' => 'User']) . '/';
-                                if (string_starts_with($url, $users_prefix)) {
+                                $users_prefix = route('scim.resources', ['resourceType' => 'User']).'/';
+                                if (str_starts_with($url, $users_prefix)) {
                                     $manager_id = substr($url, strlen($users_prefix));
                                 }
                             } elseif (array_key_exists('value', $value)) {
@@ -397,9 +587,10 @@ class SnipeSCIMConfig
                                 // that, at least, is the spec - but *what* ID is that?! It's supposed to be a Snipe-IT one!
                                 $manager_id = $value['value'];
                             }
-                            \Log::debug("Non-Microsoft - Trying to '$operation' for manager with value: " . print_r($value, true));
+                            \Log::debug("Non-Microsoft - Trying to '$operation' for manager with value: ".print_r($value, true));
                             if ($manager_id && User::find($manager_id)) {
                                 $object->manager_id = $manager_id;
+
                                 return;
                             }
                             throw new SCIMException("No manager given, or manager doesn't exist", 400);
@@ -408,7 +599,7 @@ class SnipeSCIMConfig
                 ),
                 (new AttributeSchema(self::GROKABILITY, false))->withSubAttributes(
                     new MappedTable('location', 'location', Location::class, 'location_id', 'name'),
-                    new MappedTable('company', 'company', Company::class, 'company_id', 'name'),
+                    new SCIMCompanyAttribute('company', 'company', Company::class, 'company_id', 'name'),
                 )
             ),
         ];
@@ -421,24 +612,24 @@ class SnipeSCIMConfig
             'class' => $this->getGroupClass(),
             'singular' => 'Group',
 
-            //eager loading
+            // eager loading
             'withRelations' => [],
             'description' => 'Group',
 
             'map' => complex()->withSubAttributes(
-                new class ('schemas', [
-                    "urn:ietf:params:scim:schemas:core:2.0:Group",
-                ]) extends Constant {
+                new class('schemas', ['urn:ietf:params:scim:schemas:core:2.0:Group']) extends Constant
+                {
                     public function replace($value, &$object, $path = null)
                     {
                         // do nothing
                         $this->dirty = true;
                     }
                 },
-                (new class ('id', null) extends Constant {
+                (new class('id', null) extends Constant
+                {
                     protected function doRead(&$object, $attributes = [])
                     {
-                        return (string)$object->id;
+                        return (string) $object->id;
                     }
 
                     public function remove($value, &$object, $path = null)
@@ -457,16 +648,17 @@ class SnipeSCIMConfig
                             $fail('The name has already been taken.');
                         }
                     }),
-                    (new MutableCollection('members'))->withSubAttributes(
+                    (new SnipeMutableCollection('members'))->withSubAttributes(
                         eloquent('value', 'id')->ensure('required'),
-                        (new class ('$ref') extends Eloquent {
+                        (new class('$ref') extends Eloquent
+                        {
                             protected function doRead(&$object, $attributes = [])
                             {
                                 return route(
                                     'scim.resource',
                                     [
                                         'resourceType' => 'Users',
-                                        'resourceObject' => $object->id ?? "not-saved"
+                                        'resourceObject' => $object->id ?? 'not-saved',
                                     ]
                                 );
                             }

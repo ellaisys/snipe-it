@@ -88,7 +88,7 @@
                 </div>
                 <div class="col-md-5">
                     <label class="form-control">
-                        <input type="checkbox" name="null_expected_checkin" value="1">
+                        <input type="checkbox" name="null_expected_checkin_date" value="1">
                         {{ trans_choice('general.set_to_null', count($assets),['selection_count' => count($assets)]) }}
                     </label>
                 </div>
@@ -177,7 +177,7 @@
             </label>
             <div class="input-group col-md-3">
               <span class="input-group-addon">{{ $snipeSettings->default_currency }}</span>
-                <input type="text" class="form-control"  maxlength="10" placeholder="{{ trans('admin/hardware/form.cost') }}" name="purchase_cost" id="purchase_cost" value="{{ old('purchase_cost') }}">
+                <input type="text" class="form-control" pattern="^\d+([.,]\d+)?$" maxlength="10" placeholder="{{ trans('admin/hardware/form.cost') }}" name="purchase_cost" id="purchase_cost" value="{{ old('purchase_cost') }}">
                 {!! $errors->first('purchase_cost', '<span class="alert-msg" aria-hidden="true"><i class="fas fa-times" aria-hidden="true"></i> :message</span>') !!}
             </div>
           </div>

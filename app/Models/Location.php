@@ -170,14 +170,13 @@ class Location extends SnipeModel
      */
     public function assets()
     {
+        // Pluck IDs then whereIn — do NOT replace with whereHas. whereHas generates a correlated EXISTS per row and causes severe slowdowns in withCount contexts.
+        $ids = Statuslabel::where(function ($q) {
+            $q->where('deployable', 1)->orWhere('pending', 1)->orWhere('archived', 0);
+        })->whereNull('deleted_at')->pluck('id');
+
         return $this->hasMany(Asset::class, 'location_id')
-            ->whereHas(
-                'status', function ($query) {
-                    $query->where('status_labels.deployable', '=', 1)
-                        ->orWhere('status_labels.pending', '=', 1)
-                        ->orWhere('status_labels.archived', '=', 0);
-                }
-            );
+            ->whereIn('assets.status_id', $ids->isEmpty() ? [0] : $ids);
     }
 
     public function countAllTheThings()
@@ -262,6 +261,28 @@ class Location extends SnipeModel
     {
         return $this->belongsTo(self::class, 'parent_id', 'id')
             ->with('parent');
+    }
+
+    /**
+     * Walk up the parent chain to find the nearest ancestor with a company_id.
+     * Used by FMCS checkout validation so that assets can be checked out to
+     * child locations whose company is only set on a parent location.
+     */
+    public function effectiveFmcsCompanyId(): ?int
+    {
+        if ($this->company_id) {
+            return (int) $this->company_id;
+        }
+
+        $ancestor = $this->parent()->withoutGlobalScopes()->first();
+        while ($ancestor) {
+            if ($ancestor->company_id) {
+                return (int) $ancestor->company_id;
+            }
+            $ancestor = $ancestor->parent()->withoutGlobalScopes()->first();
+        }
+
+        return null;
     }
 
     /**

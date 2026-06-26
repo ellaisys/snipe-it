@@ -36,7 +36,7 @@ return [
 
     'assets' => [
         'name' => 'Activos',
-        'note' => 'Grants access to the Assets section of the application.',
+        'note' => 'Dar acceso a la sección de Activos de la aplicación.',
     ],
 
     'assetsview' => [
@@ -72,7 +72,7 @@ return [
 
     'assetsviewrequestable' => [
         'name' => 'Ver activos solicitados',
-        'note' => 'Allows the user to view assets that are marked as requestable.',
+        'note' => 'Permite al usuario ver los activos marcados como solicitados.',
     ],
 
     'assetsviewencrypted-custom-fields' => [
@@ -155,16 +155,16 @@ return [
         'note' => 'Grants access to the Consumables section of the application.',
     ],
     'consumablesview' => [
-        'name' => 'View Consumables',
+        'name' => 'Ver Comsumibles',
     ],
     'consumablescreate' => [
         'name' => 'Crear nuevos consumibles',
     ],
     'consumablesedit' => [
-        'name' => 'Edit Consumables',
+        'name' => 'Editar Consumibles',
     ],
     'consumablesdelete' => [
-        'name' => 'Delete Consumables',
+        'name' => 'Eliminar Consumibles',
     ],
     'consumablescheckout' => [
         'name' => 'Check Out Consumables',
@@ -274,33 +274,33 @@ return [
     ],
 
     'modelscreate' => [
-        'name' => 'Create New Models',
+        'name' => 'Crear nuevos modelos',
     ],
     'modelsedit' => [
-        'name' => 'Edit Models',
+        'name' => 'Editar Modelos',
     ],
     'modelsdelete' => [
-        'name' => 'Delete Models',
+        'name' => 'Eliminar Modelos',
     ],
     'categories' => [
         'name' => 'Categorías',
-        'note' => 'Grants access to the Categories section of the application.',
+        'note' => 'Dar acceso a la sección de Categorías de la aplicación.',
     ],
     'categoriesview' => [
-        'name' => 'View Categories',
+        'name' => 'Ver categorias',
     ],
     'categoriescreate' => [
-        'name' => 'Create New Categories',
+        'name' => 'Crer Nuevas Categorias',
     ],
     'categoriesedit' => [
-        'name' => 'Edit Categories',
+        'name' => 'Editar Categorias',
     ],
     'categoriesdelete' => [
-        'name' => 'Delete Categories',
+        'name' => 'Eliminar Categorias',
     ],
     'departments' => [
         'name' => 'Departamentos',
-        'note' => 'Grants access to the Departments section of the application.',
+        'note' => 'Dar acceso a la sección de Departamentos de la aplicación.',
     ],
     'departmentsview' => [
         'name' => 'Ver Departamentos',
@@ -399,19 +399,19 @@ return [
         'note' => 'Grants access to the Companies section of the application.',
     ],
     'companiesview' => [
-        'name' => 'View Companies',
+        'name' => 'Ver empresas',
     ],
     'companiescreate' => [
-        'name' => 'Create New Companies',
+        'name' => 'Crear Nuevas Empresas',
     ],
     'companiesedit' => [
-        'name' => 'Edit Companies',
+        'name' => 'Editar Empresas',
     ],
     'companiesdelete' => [
-        'name' => 'Delete Companies',
+        'name' => 'Eliminar Empresas',
     ],
     'user-self-accounts' => [
-        'name' => 'User Self Accounts',
+        'name' => 'Cuentas propias del usuario',
         'note' => 'Grants non-admin users the ability to manage certain aspects of their own user accounts.',
     ],
     'selftwo-factor' => [

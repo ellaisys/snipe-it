@@ -44,6 +44,7 @@
 
         :root {
             color-scheme: light dark;
+            --color-bg: light-dark(#ecf0f5, #222222);
             --btn-theme-hover-text-color: {{ $nav_link_color ?? 'light-dark(hsl(from var(--main-theme-color) h s calc(l - 10)),hsl(from var(--main-theme-color) h s calc(l - 10)))' }};
             --btn-theme-hover: {{ $nav_link_color ?? 'light-dark(hsl(from var(--main-theme-color) h s calc(l - 10)),hsl(from var(--main-theme-color) h s calc(l - 10)))' }};
             --btn-theme-text-color: {{ $nav_link_color ?? 'light-dark(hsl(from var(--main-theme-color) h s calc(l + 10)),hsl(from var(--main-theme-color) h s calc(l - 10)))' }};
@@ -69,6 +70,10 @@
             --text-success: light-dark(#039516,#4ced61);
             --text-warning: light-dark(#da9113,#f3a51f);
             --input-border-color: light-dark(#d2d6de,#656464);
+            --default-label-link-bg: var(--color-bg);
+            --default-label-link-text: light-dark({{ $link_light_color ?? '#296282' }}, {{ $link_dark_color ?? '#5fa4cc' }});
+            --default-label-link-border: 1px solid light-dark(#b8c7ce, #494747);
+
         }
 
         [data-theme="light"] {
@@ -84,7 +89,6 @@
             --btn-theme-hover: var(--main-theme-hover);
             --callout-bg-color: var(--box-header-bottom-border-color);
             --callout-left-border: var(--box-header-top-border-color);
-            --color-bg: #ecf0f5;
             --header-color: #000000;
             --input-group-bg: hsl(from var(--box-bg) h s calc(l - 5));
             --input-group-fg: hsl(from var(--input-group-bg) h s calc(l - 50));
@@ -109,7 +113,6 @@
             --btn-theme-hover: var(--main-theme-hover);
             --callout-bg-color: var(--box-header-top-border-color);
             --callout-left-border: #323131;
-            --color-bg: #222222;
             --header-color: #ffffff;
             --input-group-bg: hsl(from var(--box-bg) h s calc(l + 10));
             --input-group-fg: hsl(from var(--input-group-bg) h s calc(l + 50));
@@ -231,6 +234,18 @@
         }
 
         /**
+        Safari ignores option[selected] styling on plain <select multiple> until
+        the user interacts with the list, so pre-selected options render with
+        the browser's default light highlight. Force a lighter background on the
+        whole select in dark mode so pre-selected items stay readable.
+         */
+        [data-theme="dark"] select[multiple],
+        [data-theme="dark"] select[multiple] option {
+            background-color: #d2d6de !important;
+            color: #373636 !important;
+        }
+
+        /**
         Multiselect maybe?
          */
         .select2-results__option[aria-selected=true]
@@ -301,6 +316,7 @@
         input[type="radio"]:disabled,
         input[readonly],
         textarea[readonly],
+        textarea:disabled,
         .select2-container--default.select2-container--disabled .select2-selection--single,
         .select2-container--default.select2-container--disabled .select2-selection--multiple,
         .select2-container--default.select2-container--disabled .select2-selection__rendered,
@@ -579,6 +595,21 @@
             color: var(--nav-primary-text-color) !important;
         }
 
+        .label-light {
+            background-color: var(--default-label-link-bg) !important;
+            color: var(--color-fg) !important;
+            font-size: 12px !important;
+            font-weight: normal !important;
+            line-height: 25px;
+            margin-left: 0px;
+            padding-left: 3px;
+
+        }
+
+        a.label-light,
+        a.label-light:hover {
+            color: var(--link-color) !important;
+        }
 
         .dropdown-menu > li > a,
         .dropdown-menu > li > a:link,
@@ -1352,8 +1383,9 @@
 
 
                             <!-- User Account: style can be found in dropdown.less -->
-                            @if (auth()->check())
+                            @auth
                                 <li class="dropdown user user-menu">
+
                                     <a href="#" class="dropdown-toggle" data-toggle="dropdown">
                                         @if (auth()->user()->present()->gravatar())
                                             <img src="{{ Auth::user()->present()->gravatar() }}" class="user-image"
@@ -1367,8 +1399,11 @@
                                             <strong class="caret"></strong>
                                         </span>
                                     </a>
+
+
                                     <ul class="dropdown-menu">
-                                        <!-- User image -->
+
+                                        <!-- User assets -->
                                         @can('self.profile')
                                         <li {!! (request()->is('account/view-assets') ? ' class="active"' : '') !!}>
                                             <a href="{{ route('view-assets') }}">
@@ -1376,6 +1411,7 @@
                                                 {{ trans('general.viewassets') }}
                                             </a>
                                         </li>
+                                        @endcan
 
 
                                         @can('viewRequestable', \App\Models\Asset::class)
@@ -1386,6 +1422,7 @@
                                                 </a></li>
                                         @endcan
 
+                                        @can('self.profile')
                                         <li {!! (request()->is('account/accept') ? ' class="active"' : '') !!}>
                                             <a href="{{ route('account.accept') }}">
                                                 <x-icon type="checkmark" class="fa-fw" />
@@ -1394,7 +1431,7 @@
                                         </li>
 
                                         @endcan
-                                        <li {!! (request()->is('account/password') ? ' class="active"' : '') !!}>
+                                        <li {!! (request()->is('account/profile') ? ' class="active"' : '') !!}>
                                             <a href="{{ route('profile') }}">
                                                 <x-icon type="user" class="fa-fw" />
                                                 {{ trans('general.editprofile') }}
@@ -1403,7 +1440,7 @@
 
                                         @can('self.profile')
                                             @if (Auth::user()->ldap_import!='1')
-                                                <li {!! (request()->is('account/profile') ? ' class="active"' : '') !!}>
+                                                <li {!! (request()->is('account/password') ? ' class="active"' : '') !!}>
                                                     <a href="{{ route('account.password.index') }}">
                                                         <x-icon type="password" class="fa-fw"/>
                                                         {{ trans('general.changepassword') }}
@@ -1426,6 +1463,7 @@
                                                 </a>
                                             </li>
                                         @endcan
+                                        
                                         <li class="divider"></li>
                                         <li>
                                             <a href="{{ route('logout.get') }}"
@@ -1442,7 +1480,7 @@
                                         </li>
                                     </ul>
                                 </li>
-                            @endif
+                            @endauth
 
 
                             @can('superadmin')
@@ -1821,6 +1859,7 @@
 
                         @can('reports.view')
                             <li class="treeview{{ (request()->is('reports*') ? ' active' : '') }}">
+
                                 <a href="#" class="dropdown-toggle">
                                     <x-icon type="reports" class="fa-fw" />
                                     <span>{{ trans('general.reports') }}</span>
@@ -1828,6 +1867,11 @@
                                 </a>
 
                                 <ul class="treeview-menu">
+                                    <li {{!! (request()->is('reports') ? ' class="active"' : '') !!}}>
+                                        <a href="{{ route('reports.index') }}">
+                                            {{ trans('general.list_all') }}
+                                        </a>
+                                    </li>
                                     <li {{!! (request()->is('reports/activity') ? ' class="active"' : '') !!}}>
                                         <a href="{{ route('reports.activity') }}">
                                             {{ trans('general.activity_report') }}
@@ -2331,11 +2375,23 @@
                 email: "{{ trans('validation.generic.email') }}"
             });
 
+            $.validator.addMethod('pattern', function(value, element, param) {
+                if (this.optional(element)) {
+                    return true;
+                }
+                if (typeof param === 'string') {
+                    param = new RegExp('^(?:' + param + ')$');
+                }
+                return param.test(value);
+            }, '{{ trans('validation.generic.invalid_value_in_field') }}');
+
 
             function showHideEncValue(e) {
                 // Use element id to find the text element to hide / show
                 var targetElement = e.id+"-to-show";
                 var hiddenElement = e.id+"-to-hide";
+                var targetEl = document.getElementById(targetElement);
+                var isMarkdown = targetEl && targetEl.dataset.markdown;
                 var audio = new Audio('{{ config('app.url') }}/sounds/lock.mp3');
                 if($(e).hasClass('fa-lock')) {
                     @if ((isset($user)) && ($user->enable_sounds))
@@ -2343,7 +2399,11 @@
                     @endif
                     $(e).removeClass('fa-lock').addClass('fa-unlock');
                     // Show the encrypted custom value and hide the element with asterisks
-                    document.getElementById(targetElement).style.fontSize = "100%";
+                    if (isMarkdown) {
+                        targetEl.style.display = "block";
+                    } else {
+                        targetEl.style.fontSize = "100%";
+                    }
                     document.getElementById(hiddenElement).style.display = "none";
 
                 } else {
@@ -2352,7 +2412,12 @@
                     @endif
                     $(e).removeClass('fa-unlock').addClass('fa-lock');
                     // ClipboardJS can't copy display:none elements so use a trick to hide the value
-                    document.getElementById(targetElement).style.fontSize = "0px";
+                    if (isMarkdown) {
+                        targetEl.style.display = "none";
+                    } else {
+                        // ClipboardJS can't copy display:none elements so use a trick to hide the value
+                        targetEl.style.fontSize = "0px";
+                    }
                     document.getElementById(hiddenElement).style.display = "";
 
                  }
@@ -2474,23 +2539,34 @@
 
                 // Function to add original value to elements
                 function addValue($element) {
-                    // Get original value of the element
-                    var originalValue = $element.text().trim();
+                    var originalHtml = $element.html().trim();
+                    var originalText = $element.text().trim();
+                    var hasHtmlContent = originalHtml !== '' && originalHtml !== originalText;
 
-                    // Show asterisks only for not empty values
-                    if (originalValue !== '') {
-                        // This is necessary to avoid loop because value is generated dynamically
-                        if (originalValue !== '' && originalValue !== asterisks) $element.attr('value', originalValue);
+                    // Show asterisks only for non-empty values
+                    if (originalText !== '') {
+                        var asterisks = '*'.repeat(11);
+                        // Avoid reprocessing already-asterisked elements
+                        if (originalText !== asterisks) {
+                            if (hasHtmlContent) {
+                                $element.data('encrypted-html', originalHtml);
+                            }
+                            $element.attr('value', originalText);
+                        }
 
-                        // Hide the original value and show asterisks of the same length
-                        var asterisks = '*'.repeat(originalValue.length);
+                        // Hide the original value and show a fixed-length asterisk placeholder
                         $element.text(asterisks);
 
-                        // Add click event to show original text
+                        // Add click event to show original value
                         $element.click(function() {
                             var $this = $(this);
                             if ($this.text().trim() === asterisks) {
-                                $this.text($this.attr('value'));
+                                var savedHtml = $this.data('encrypted-html');
+                                if (savedHtml) {
+                                    $this.html(savedHtml);
+                                } else {
+                                    $this.text($this.attr('value'));
+                                }
                             } else {
                                 $this.text(asterisks);
                             }

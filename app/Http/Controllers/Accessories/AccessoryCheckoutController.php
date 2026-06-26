@@ -4,9 +4,9 @@ namespace App\Http\Controllers\Accessories;
 
 use App\Events\CheckoutableCheckedOut;
 use App\Helpers\Helper;
-use App\Http\Controllers\CheckInOutRequest;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\AccessoryCheckoutRequest;
+use App\Http\Traits\CheckInOutTrait;
 use App\Models\Accessory;
 use App\Models\AccessoryCheckout;
 use App\Models\CheckoutAcceptance;
@@ -18,7 +18,7 @@ use Illuminate\Http\Request;
 
 class AccessoryCheckoutController extends Controller
 {
-    use CheckInOutRequest;
+    use CheckInOutTrait;
 
     /**
      * Return the form to checkout an Accessory to a user.
@@ -65,6 +65,20 @@ class AccessoryCheckoutController extends Controller
 
         $target = $this->determineCheckoutTarget();
         session()->put(['checkout_to_type' => $target]);
+
+        if (! $accessory->canCheckoutTo($target)) {
+            $targetType = match (class_basename($target)) {
+                'User' => trans('general.user'),
+                'Location' => trans('general.location'),
+                default => trans('general.asset'),
+            };
+
+            return redirect()->back()->with('error', trans('general.error_checkout_company_mismatch', [
+                'item' => trans('general.accessory').' "'.$accessory->name.'"',
+                'item_company' => $accessory->company?->name ?? trans('general.unassigned'),
+                'target' => $targetType.' "'.($target->name ?? $target->username ?? $target->id).'"',
+            ]));
+        }
 
         $accessory->checkout_qty = $request->input('checkout_qty', 1);
 

@@ -17,10 +17,12 @@ use App\Http\Controllers\DepreciationsController;
 use App\Http\Controllers\GroupsController;
 use App\Http\Controllers\HealthController;
 use App\Http\Controllers\LabelsController;
+use App\Http\Controllers\MaintenanceTypesController;
 use App\Http\Controllers\ManufacturersController;
 use App\Http\Controllers\ModalController;
 use App\Http\Controllers\NotesController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\QrCodeController;
 use App\Http\Controllers\ReportsController;
 use App\Http\Controllers\ReportTemplatesController;
 use App\Http\Controllers\SettingsController;
@@ -86,6 +88,11 @@ Route::group(['middleware' => 'auth'], function () {
     Route::resource('suppliers', SuppliersController::class);
 
     Route::post('suppliers/bulk/delete', [BulkSuppliersController::class, 'destroy'])->name('suppliers.bulk.delete');
+
+    /*
+    * Maintenance Types
+    */
+    Route::resource('maintenance-types', MaintenanceTypesController::class);
 
     /*
     * Depreciations
@@ -229,6 +236,9 @@ Route::group(['prefix' => 'admin', 'middleware' => ['auth', 'authorize:superuser
         ->name('settings.oauth.index')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('settings.index')
             ->push(trans('admin/settings/general.oauth'), route('settings.oauth.index')));
+
+    Route::post('oauth/request-filters', [SettingsController::class, 'postApiRequestFilters'])
+        ->name('settings.oauth.request_filters.save');
 
     Route::post('oauth/tokens/{token}/revoke', [SettingsController::class, 'revokePersonalAccessToken'])
         ->name('settings.oauth.tokens.revoke');
@@ -457,15 +467,22 @@ Route::group(['middleware' => ['auth']], function () {
 
 Route::group(['prefix' => 'reports', 'middleware' => ['auth']], function () {
 
+    Route::get('/', [ReportsController::class, 'index'])
+        ->name('reports.index')
+        ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index')));
+
     Route::get('audit', [ReportsController::class, 'audit'])
         ->name('reports.audit')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index'))
             ->push(trans('general.audit_report'), route('reports.audit')));
 
     Route::get(
         'depreciation', [ReportsController::class, 'getDeprecationReport'])
         ->name('reports/depreciation')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index'))
             ->push(trans('general.depreciation_report'), route('reports/depreciation')));
 
     // Is this still used??
@@ -473,30 +490,38 @@ Route::group(['prefix' => 'reports', 'middleware' => ['auth']], function () {
         'export/depreciation', [ReportsController::class, 'exportDeprecationReport'])
         ->name('reports/export/depreciation')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index'))
             ->push(trans('general.depreciation_report'), route('reports.audit')));
 
     Route::get(
         'maintenances', [ReportsController::class, 'getMaintenancesReport'])
         ->name('ui.reports.maintenances')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index'))
             ->push(trans('general.asset_maintenance_report'), route('ui.reports.maintenances')));
 
     // Is this still used?
     Route::get('export/maintenances', [ReportsController::class, 'exportMaintenancesReport'])
         ->name('reports/export/maintenances')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index'))
             ->push(trans('general.asset_maintenance_report'), route('reports/export/maintenances')));
 
     Route::get('licenses', [ReportsController::class, 'getLicenseReport'])
         ->name('reports/licenses')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index'))
             ->push(trans('general.license_report'), route('reports/licenses')));
 
+    // @TODO this should be a GET?
     Route::get('export/licenses', [ReportsController::class, 'exportLicenseReport'])
         ->name('reports/export/licenses');
 
     Route::get('accessories', [ReportsController::class, 'getAccessoryReport'])
-        ->name('reports/accessories');
+        ->name('reports/accessories')
+        ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index'))
+            ->push(trans('general.accessory_report'), route('reports/accessories')));
 
     Route::get('export/accessories', [ReportsController::class, 'exportAccessoryReport'])
         ->name('reports/export/accessories');
@@ -504,6 +529,7 @@ Route::group(['prefix' => 'reports', 'middleware' => ['auth']], function () {
     Route::get('custom', [ReportsController::class, 'getCustomReport'])
         ->name('reports/custom')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index'))
             ->push(trans('general.custom_report'), route('reports/custom')));
 
     Route::post('custom', [ReportsController::class, 'postCustom'])
@@ -539,6 +565,7 @@ Route::group(['prefix' => 'reports', 'middleware' => ['auth']], function () {
         'activity', [ReportsController::class, 'getActivityReport'])
         ->name('reports.activity')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index'))
             ->push(trans('general.activity_report'), route('reports.activity')));
 
     Route::post('activity', [ReportsController::class, 'postActivityReport'])
@@ -547,6 +574,7 @@ Route::group(['prefix' => 'reports', 'middleware' => ['auth']], function () {
     Route::get('unaccepted_assets/{deleted?}', [ReportsController::class, 'getAssetAcceptanceReport'])
         ->name('reports/unaccepted_assets')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.reports'), route('reports.index'))
             ->push(trans('general.unaccepted_asset_report'), route('reports/unaccepted_assets')));
 
     Route::post('unaccepted_assets/sent_reminder', [ReportsController::class, 'sentAssetAcceptanceReminder'])
@@ -631,7 +659,7 @@ Route::group(['middleware' => 'web'], function () {
     Route::post(
         'two-factor',
         [LoginController::class, 'postTwoFactorAuth']
-    );
+    )->middleware('throttle:two_factor');
 
     Route::post(
         'password/email',
@@ -672,6 +700,14 @@ Route::group(['middleware' => 'web'], function () {
         'logout',
         [LoginController::class, 'logout']
     )->name('logout.post');
+
+    /**
+     * QR Code routes
+     */
+    Route::get('{object_type}/{id}/qr_code',
+        [QrCodeController::class, 'show']
+    )->name('qr_code/common')
+        ->where(['object_type' => 'accessories|assets|hardware|licenses|locations|models|companies|components|consumables|users']);
 
     /**
      * Uploaded files API routes

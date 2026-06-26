@@ -18,6 +18,7 @@ class CategoryPresenter extends Presenter
             [
                 'field' => 'checkbox',
                 'checkbox' => true,
+                'formatter' => 'checkboxEnabledFormatter',
                 'titleTooltip' => trans('general.select_all_none'),
                 'printIgnore' => true,
                 'class' => 'hidden-print',
@@ -76,7 +77,7 @@ class CategoryPresenter extends Presenter
                 'searchable' => false,
                 'sortable' => true,
                 'class' => 'css-envelope',
-                'title' => 'Send Email',
+                'title' => trans('general.send_email'),
                 'visible' => true,
                 'formatter' => 'trueFalseFormatter',
             ], [

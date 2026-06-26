@@ -30,12 +30,12 @@ Route::group(['prefix' => 'v1', 'middleware' => ['api', 'api-throttle:api']], fu
         $client = Client::firstOrCreate(
             ['redirect' => 'com.grokability.snipeitmobile://home'],
             [
-                'name'                   => 'Snipe-IT Mobile App',
-                'user_id'                => null,
-                'secret'                 => '',
+                'name' => 'Snipe-IT Mobile App',
+                'user_id' => null,
+                'secret' => '',
                 'personal_access_client' => false,
-                'password_client'        => false,
-                'revoked'                => false,
+                'password_client' => false,
+                'revoked' => false,
             ]);
 
         return response()->json([
@@ -625,6 +625,18 @@ Route::group(['prefix' => 'v1', 'middleware' => ['api', 'api-throttle:api']], fu
         ]
     )->name('api.maintenances.history')->withTrashed();
 
+    Route::get('/maintenances/{maintenance}/notes',
+        [Api\MaintenancesController::class, 'notesIndex']
+    )->name('api.maintenances.notes.index');
+
+    Route::post('/maintenances/{maintenance}/notes',
+        [Api\MaintenancesController::class, 'notesStore']
+    )->name('api.maintenances.notes.store');
+
+    Route::post('/maintenances/{maintenance}/complete',
+        [Api\MaintenancesController::class, 'complete']
+    )->name('api.maintenances.complete');
+
     Route::resource('maintenances',
         Api\MaintenancesController::class,
         ['names' => [
@@ -638,6 +650,23 @@ Route::group(['prefix' => 'v1', 'middleware' => ['api', 'api-throttle:api']], fu
             'parameters' => ['maintenance' => 'maintenance_id'],
         ]
     ); // end assets API routes
+
+    /**
+     * Maintenance types API routes
+     */
+    Route::resource('maintenance-types',
+        Api\MaintenanceTypesController::class,
+        ['names' => [
+            'index' => 'api.maintenance-types.index',
+            'show' => 'api.maintenance-types.show',
+            'store' => 'api.maintenance-types.store',
+            'update' => 'api.maintenance-types.update',
+            'destroy' => 'api.maintenance-types.destroy',
+        ],
+            'except' => ['create', 'edit'],
+            'parameters' => ['maintenance-type' => 'maintenanceType'],
+        ]
+    );
 
     /**
      * Imports API routes
@@ -696,6 +725,20 @@ Route::group(['prefix' => 'v1', 'middleware' => ['api', 'api-throttle:api']], fu
                 'history',
             ]
         )->name('api.licenses.history')->withTrashed();
+
+        Route::post('{license_id}/checkout',
+            [
+                Api\LicensesController::class,
+                'checkout',
+            ]
+        )->name('api.licenses.checkout');
+
+        Route::post('{license_id}/checkin',
+            [
+                Api\LicensesController::class,
+                'checkin',
+            ]
+        )->name('api.licenses.checkin');
 
     });
 
@@ -1325,6 +1368,13 @@ Route::group(['prefix' => 'v1', 'middleware' => ['api', 'api-throttle:api']], fu
                 'index',
             ]
         )->name('api.activity.index');
+
+        Route::get('activity/chart',
+            [
+                Api\ReportsController::class,
+                'activityChart',
+            ]
+        )->name('api.reports.activity.chart');
     }); // end reports api routes
 
     /**
