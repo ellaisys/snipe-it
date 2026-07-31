@@ -72,7 +72,8 @@ class ActivityReportTest extends TestCase
 
         $viewingUser = User::factory()
             ->canViewReports()
-            ->create(['company_id' => $company->id]);
+            ->forCompany($company)
+            ->create();
 
         $model = AssetModel::factory()->create();
 
@@ -109,7 +110,8 @@ class ActivityReportTest extends TestCase
 
         $viewerInCompanyB = User::factory()
             ->canViewReports()
-            ->create(['company_id' => $companyB->id]);
+            ->forCompany($companyB)
+            ->create();
 
         // Superuser uploads a file to company A's asset (log gets company_id = companyA->id)
         $this->actingAsForApi($superUser)
@@ -144,13 +146,15 @@ class ActivityReportTest extends TestCase
             ->viewUsers()
             ->viewAssets()
             ->canViewReports()
-            ->create(['company_id' => $companyA->id]);
+            ->forCompany($companyA)
+            ->create();
 
         $userInCompanyB = User::factory()
             ->viewUsers()
             ->viewAssets()
             ->canViewReports()
-            ->create(['company_id' => $companyB->id]);
+            ->forCompany($companyB)
+            ->create();
 
         Asset::factory()->count(5)->create(['company_id' => $companyA->id]);
         Asset::factory()->count(4)->create(['company_id' => $companyB->id]);
@@ -183,5 +187,39 @@ class ActivityReportTest extends TestCase
             ])
             ->assertJson(fn (AssertableJson $json) => $json->has('rows', 7)->etc());
 
+    }
+
+    public function test_search_matches_action_log_location_name()
+    {
+        // Activity Report eager-loads and shows the location on each
+        // action_log row (e.g. checkouts to a location). Before adding
+        // location to Actionlog's $searchableRelations, typing that
+        // location's name into the report search silently returned
+        // nothing.
+        $actor = User::factory()->superuser()->create();
+
+        $location = \App\Models\Location::factory()->create(['name' => 'Kraków Office']);
+        $matchingLog = Actionlog::factory()->create([
+            'action_type' => 'checkout',
+            'item_type' => Asset::class,
+            'item_id' => Asset::factory()->create()->id,
+            'location_id' => $location->id,
+        ]);
+        $otherLog = Actionlog::factory()->create([
+            'action_type' => 'checkout',
+            'item_type' => Asset::class,
+            'item_id' => Asset::factory()->create()->id,
+            'location_id' => null,
+        ]);
+
+        $ids = collect($this->actingAsForApi($actor)
+            ->getJson(route('api.activity.index', ['search' => 'Kraków']))
+            ->assertOk()
+            ->json('rows'))
+            ->pluck('id')
+            ->all();
+
+        $this->assertContains($matchingLog->id, $ids);
+        $this->assertNotContains($otherLog->id, $ids);
     }
 }

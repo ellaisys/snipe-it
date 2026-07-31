@@ -1,21 +1,7 @@
-{{-- See snipeit_modals.js for what powers this --}}
-
-<script nonce="{{ csrf_token() }}">
-    window.setTimeout(function () {
-        $('#modal-genPassword').pGenerator({
-            'bind': 'click',
-            'passwordElement': '#modal-password',
-            'passwordLength': 16,
-            'uppercase': true,
-            'lowercase': true,
-            'numbers': true,
-            'specialChars': true,
-            'onPasswordGenerated': function (generatedPassword) {
-                $('#modal-password_confirmation').val($('#modal-password').val());
-            }
-        });
-    }, 500);
-</script>
+{{-- See snipeit_modals.js for what powers this. The password-generator
+     wiring and the first-input focus that used to be inline <script>
+     blocks on this partial now live inside the modal-load callback in
+     snipeit_modals.js so all modal-lifecycle JS is in one place. --}}
 
 <div class="modal-dialog">
     <div class="modal-content">
@@ -24,8 +10,8 @@
             <h2 class="modal-title">{{ trans('admin/users/table.createuser') }}</h2>
         </div>
         <div class="modal-body">
-            <form action="{{ route('api.users.store') }}" onsubmit="return false">
-                <div class="alert alert-danger" id="modal_error_msg" style="display:none"></div>
+            <form class="form-horizontal" action="{{ route('api.users.store') }}" onsubmit="return false">
+                <x-alert type="danger" id="modal_error_msg" style="display:none"></x-alert>
 
                 @if ($user->companies->isNotEmpty())
                     <input type="hidden" name="company_id" value="{{ $user->companies->first()->id }}">
@@ -57,7 +43,7 @@
                 </div>
 
                 <div class="dynamic-form-row">
-                    <div class="col-md-3 col-xs-12"><label for="modal-last_name">{{ trans('general.last_name') }}:</label></div>
+                    <label for="modal-last_name" class="col-md-3 col-xs-12 control-label">{{ trans('general.last_name') }}:</label>
                     <div class="col-md-9 col-xs-12"><input type="text" name="last_name" id="modal-last_name" class="form-control" maxlength="191" required></div>
                 </div>
 
@@ -71,11 +57,28 @@
                 </div>
 
                 <div class="dynamic-form-row">
-                    <div class="col-md-3 col-xs-12"><label for="modal-username">{{ trans('admin/users/table.username') }}:</label></div>
+                    <label for="modal-username" class="col-md-3 col-xs-12 control-label">{{ trans('admin/users/table.username') }}:</label>
                     <div class="col-md-9 col-xs-12"><input type="text" name="username" id="modal-username" class="form-control" maxlength="191" required></div>
                 </div>
 
+                {{-- Activated checkbox is rendered ABOVE the password fields
+                     so the toggle sits above the inputs whose visibility it
+                     controls (see snipeit.js). Defaults to unchecked because
+                     the modal is typically used to create a user on-the-fly
+                     for asset assignment, where login is not usually needed. --}}
                 <div class="dynamic-form-row">
+                    <div class="col-md-offset-3 col-md-9">
+                        <label class="form-control">
+                            <input type="checkbox" value="1" name="activated" id="modal-activated" aria-label="activated">
+                            {{ trans('general.login_enabled') }}
+                        </label>
+                        <x-form.help name="modal-activated" icon="tip">
+                            {{ trans('admin/users/general.activated_password_required_help') }}
+                        </x-form.help>
+                    </div>
+                </div>
+
+                <div class="dynamic-form-row" style="display: none;">
                     <label for="modal-password" class="col-md-3 control-label">
                         {{ trans('admin/users/table.password') }}:
                     </label>
@@ -95,7 +98,7 @@
                     </div>
                 </div>
 
-                <div class="dynamic-form-row">
+                <div class="dynamic-form-row" style="display: none;">
                     <label for="modal-password_confirmation" class="col-md-3 control-label">
                         {{ trans('admin/users/table.password_confirm') }}:
                     </label>
@@ -119,23 +122,8 @@
                     </div>
                 </div>
 
-                <div class="dynamic-form-row">
-                    <div class="col-md-offset-3 col-md-9">
-                        <label class="form-control">
-                            <input type="checkbox" value="1" name="activated" id="modal-activated" checked aria-label="activated">
-                            {{ trans('general.login_enabled') }}
-                        </label>
-                    </div>
-                </div>
-
             </form>
         </div>
         @include('modals.partials.footer')
     </div><!-- /.modal-content -->
 </div><!-- /.modal-dialog -->
-
-<script>
-    $(document).ready(function () {
-        $('#modal-first_name').focus();
-    });
-</script>

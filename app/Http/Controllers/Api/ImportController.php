@@ -28,9 +28,17 @@ class ImportController extends Controller
     public function index(): JsonResponse|array
     {
         $this->authorize('import');
-        $imports = Import::with('adminuser')->latest()->get();
 
-        return (new ImportsTransformer)->transformImports($imports);
+        // Silently scope to the caller's own imports unless they're a superuser.
+        // The `import` permission is grantable to any user, but a stored import
+        // file (and the first CSV row exposed by the transformer) is only meant
+        // for whoever uploaded it. Superusers keep the full view.
+        $query = Import::with('adminuser')->latest();
+        if (! auth()->user()->isSuperUser()) {
+            $query->where('created_by', auth()->id());
+        }
+
+        return (new ImportsTransformer)->transformImports($query->get());
     }
 
     /**
@@ -49,14 +57,28 @@ class ImportController extends Controller
             $detector = new EncodingDetector;
 
             foreach ($files as $file) {
-                if (! in_array($file->getMimeType(), [
+                $allowedMimes = [
                     'application/vnd.ms-excel',
                     'text/csv',
                     'application/csv',
                     'text/x-Algol68', // because wtf CSV files?
                     'text/plain',
                     'text/comma-separated-values',
-                    'text/tsv', ])) {
+                    'text/tsv',
+                ];
+                $allowedExtensions = ['csv', 'tsv', 'txt'];
+                $clientExtension = strtolower(trim($file->getClientOriginalExtension()));
+
+                // The MIME allowlist is the primary check. When it fails,
+                // fall back to the client extension because finfo returns
+                // `application/octet-stream` for CSVs on Windows/IIS and
+                // for various perfectly-valid CSVs whose first row happens
+                // to match another magic signature. Callers reach this
+                // endpoint only with the `import` permission, and the CSV
+                // reader below will reject anything that isn't actually
+                // parseable with a more precise error than a MIME veto.
+                // See issue #10387.
+                if (! in_array($file->getMimeType(), $allowedMimes) && ! in_array($clientExtension, $allowedExtensions, true)) {
                     $results['error'] = 'File type must be CSV. Uploaded file is '.$file->getMimeType();
 
                     return response()->json(Helper::formatStandardApiResponse('error', null, $results['error']), 422);
@@ -195,6 +217,13 @@ class ImportController extends Controller
     {
         $this->authorize('import');
 
+        // Demo mode: uploads stay blocked at store(), but superadmins can
+        // still process the seeded sample imports so the demo shows off
+        // the flow end to end.
+        if (config('app.lock_passwords') && ! auth()->user()->isSuperUser()) {
+            return response()->json(Helper::formatStandardApiResponse('error', null, trans('general.feature_disabled')), 422);
+        }
+
         // Run a backup immediately before processing
         if ($request->input('run-backup')) {
             Log::debug('Backup manually requested via importer');
@@ -205,7 +234,11 @@ class ImportController extends Controller
 
         $import = Import::find($import_id);
 
-        if (is_null($import)) {
+        // Non-owners get the same "not found" branch as a missing record so we
+        // don't leak existence of another user's uploaded import file, and so
+        // an attacker with the `import` permission can't replay a stored file
+        // by guessing its (sequential) ID. Superusers can process any import.
+        if (is_null($import) || ($import->created_by !== auth()->id() && ! auth()->user()->isSuperUser())) {
             $error[0][0] = trans('validation.exists', ['attribute' => 'file']);
 
             return response()->json(Helper::formatStandardApiResponse('import-errors', null, $error), 500);
@@ -215,6 +248,7 @@ class ImportController extends Controller
         $redirectTo = 'hardware.index';
         switch ($request->input('import-type')) {
             case 'asset':
+            case 'assetHistory':
                 $model_perms = 'App\Models\Asset';
                 $redirectTo = 'hardware.index';
                 break;
@@ -260,17 +294,22 @@ class ImportController extends Controller
                 break;
         }
 
+        $tally = $request->getTally();
+        // Payload only carries the tally when at least one importer for this
+        // type has been wired up to record it. Un-instrumented importers
+        // leave every count at zero; suppress the block in that case so we
+        // don't surface a misleading all-zero summary in the wizard.
+        $tallyPayload = array_sum($tally) > 0 ? ['tally' => $tally] : null;
+
         if ($errors) { // Failure
-            return response()->json(Helper::formatStandardApiResponse('import-errors', null, $errors), 500);
+            return response()->json(Helper::formatStandardApiResponse('import-errors', $tallyPayload, $errors), 500);
         }
         // Flash message before the redirect
         Session::flash('success', trans('admin/hardware/message.import.success'));
 
-        if (auth()->user()->can('view', $model_perms)) {
-            return response()->json(Helper::formatStandardApiResponse('success', null, ['redirect_url' => route($redirectTo)]));
-        }
+        $redirect_url = auth()->user()->can('view', $model_perms) ? route($redirectTo) : route('imports.index');
 
-        return response()->json(Helper::formatStandardApiResponse('success', null, ['redirect_url' => route('imports.index')]));
+        return response()->json(Helper::formatStandardApiResponse('success', $tallyPayload, ['redirect_url' => $redirect_url]));
     }
 
     /**
@@ -281,6 +320,10 @@ class ImportController extends Controller
     public function destroy($import_id): JsonResponse
     {
         $this->authorize('import');
+
+        if (config('app.lock_passwords')) {
+            return response()->json(Helper::formatStandardApiResponse('error', null, trans('general.feature_disabled')), 422);
+        }
 
         if ($import = Import::find($import_id)) {
 

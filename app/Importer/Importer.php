@@ -9,6 +9,7 @@ use App\Models\User;
 use Carbon\CarbonImmutable;
 use ForceUTF8\Encoding;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use League\Csv\Reader;
@@ -159,24 +160,49 @@ abstract class Importer
      *
      * @since  5.0
      */
-    public function import()
+    public function import(?int $offset = null, ?int $limit = null)
     {
         $headerRow = $this->csv->fetchOne();
         $this->csv->setHeaderOffset(0); // explicitly sets the CSV document header record
 
         $this->populateCustomFields($headerRow);
 
-        DB::transaction(function () use ($headerRow) {
+        DB::transaction(function () use ($headerRow, $offset, $limit) {
             $importedItemsCount = 0;
+            $processedInSlice = 0;
             Model::unguard();
 
+            // Sliced imports: when the caller passes offset+limit we only
+            // process rows [offset, offset+limit). Preserves the original
+            // "iterate everything" behavior when neither is provided so
+            // CLI callers (ObjectImportCommand) and any external caller
+            // hitting the API without offset/limit still work unchanged.
             foreach ($this->csv->getRecords($headerRow) as $row) {
+                // Fully blank rows (every cell empty, like ",,,,,,,,") carry
+                // no importable data. Skipping them before both the offset
+                // walk AND handle() means slice math, tallies, and per-row
+                // logging all reflect real work rather than padding rows.
+                if (self::rowIsBlank($row)) {
+                    continue;
+                }
+
+                if ($offset !== null && $importedItemsCount < $offset) {
+                    $importedItemsCount++;
+
+                    continue;
+                }
+
+                if ($limit !== null && $processedInSlice >= $limit) {
+                    break;
+                }
+
                 // Lowercase header values to ensure we're comparing values properly.
                 $row = array_change_key_case($row, CASE_LOWER);
 
                 $this->handle($row);
 
                 $importedItemsCount++;
+                $processedInSlice++;
 
                 if ($this->progressCallback) {
                     call_user_func($this->progressCallback, $importedItemsCount);
@@ -247,6 +273,52 @@ abstract class Importer
     }
 
     /**
+     * True when the CSV row contains a value for the given logical key
+     * (whether the value is populated or empty). Callers use this to
+     * distinguish "column absent from the CSV" (leave DB alone) from
+     * "column present with an empty value" (clear the DB field on update).
+     */
+    protected function csvRowHas(array $row, string $csvKey): bool
+    {
+        return array_key_exists($this->lookupCustomKey($csvKey), $row);
+    }
+
+    /**
+     * True when every cell in the CSV row is empty after trimming.
+     * Fully blank rows (like ",,,,,,,") get filtered out before handle()
+     * so they do not count toward the tally, appear in the preview,
+     * or trigger per-row logging.
+     */
+    protected static function rowIsBlank(array $row): bool
+    {
+        foreach ($row as $value) {
+            if (trim((string) $value) !== '') {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Assign a value from the CSV row into $this->item under the given item
+     * key, only when the CSV row actually contained that column. Empty CSV
+     * cells are assigned as null (not as empty strings) so the DB stores
+     * NULL when the user explicitly clears a nullable field on update.
+     * Columns absent from the CSV row are never touched, so update mode
+     * preserves existing DB values for any field the user did not include
+     * in their file.
+     */
+    protected function setItemFromCsvIfPresent(array $row, string $itemKey, ?string $csvKey = null): void
+    {
+        $csvKey = $csvKey ?? $itemKey;
+        if ($this->csvRowHas($row, $csvKey)) {
+            $value = $this->findCsvMatch($row, $csvKey);
+            $this->item[$itemKey] = ($value === '') ? null : $value;
+        }
+    }
+
+    /**
      * Looks up A custom key in the custom field map
      *
      * @author Daniel Melzter
@@ -305,6 +377,46 @@ abstract class Importer
     }
 
     /**
+     * Per-row tally accumulated across the current slice. The wizard UI adds
+     * these across slices so the user sees a real "N created, M updated,
+     * K skipped as duplicates" summary at the end of an import instead of
+     * a generic success flash. logError() and addErrorToBag() auto-record
+     * errored; subclasses call recordCreated/Updated/Skipped explicitly
+     * from the branches of their handle() method.
+     */
+    protected array $tally = [
+        'created' => 0,
+        'updated' => 0,
+        'skipped' => 0,
+        'errored' => 0,
+    ];
+
+    protected function recordCreated(): void
+    {
+        $this->tally['created']++;
+    }
+
+    protected function recordUpdated(): void
+    {
+        $this->tally['updated']++;
+    }
+
+    protected function recordSkipped(): void
+    {
+        $this->tally['skipped']++;
+    }
+
+    protected function recordErrored(): void
+    {
+        $this->tally['errored']++;
+    }
+
+    public function getTally(): array
+    {
+        return $this->tally;
+    }
+
+    /**
      * Finds the user matching given data, or creates a new one if there is no match.
      * This is NOT used by the User Import, only for Asset/Accessory/etc where
      * there are users listed and we have to create them and associate them at
@@ -329,7 +441,11 @@ abstract class Importer
             'display_name' => $this->findCsvMatch($row, 'display_name'),
             'email' => $this->findCsvMatch($row, 'email'),
             'manager_id' => '',
-            'department_id' => '',
+            // ItemImporter::handle() has already created the Department (if
+            // the CSV row had one) and stored its id on $this->item so it
+            // can flow through to the user record. Previously this value
+            // was hard-coded to '' and the Department was orphaned.
+            'department_id' => $this->item['department_id'] ?? '',
             'username' => $this->findCsvMatch($row, 'username'),
             'activated' => $this->fetchHumanBoolean($this->findCsvMatch($row, 'activated')),
             'remote' => $this->fetchHumanBoolean(($this->findCsvMatch($row, 'remote'))),
@@ -393,6 +509,18 @@ abstract class Importer
         }
 
         // No luck finding a user on username or first name, let's create one.
+
+        // Floater-mode escalation guard (#19200). A side-effect of an asset
+        // import is that referenced users get minted with no company pivot —
+        // under floater mode that promotes them to system-wide visibility.
+        // Refuse to create the user when the importer's actor isn't trusted
+        // to grant floater status. Same guard the User CSV importer uses.
+        if (Auth::check() && ! auth()->user()->canGrantFloaterStatus()) {
+            $this->log('Skipping creation of referenced user "'.($user_array['username'] ?? '').'": cannot create a user with no company assignment while floater mode is enabled (#19200).');
+
+            return false;
+        }
+
         $user = new User;
 
         $user->first_name = $user_array['first_name'];
@@ -404,6 +532,13 @@ abstract class Importer
         $user->department_id = $user_array['department_id'] ?? null;
         $user->activated = 1;
         $user->password = $this->tempPassword;
+        // Use $this->created_by (set by setCreatedBy() from both
+        // ItemImportRequest for web imports and ObjectImportCommand for
+        // CLI imports) rather than auth()->id() so CLI-run imports get
+        // the --user_id option value instead of null. Without this,
+        // users minted as checkout targets during asset import land in
+        // the DB with a null created_by, breaking blame in the user list.
+        $user->created_by = $this->created_by;
 
         Log::debug('Creating a user with the following attributes: '.print_r($user_array, true));
 
@@ -546,25 +681,34 @@ abstract class Importer
      */
     public function createOrFetchDepartment($user_department_name)
     {
-        if ($user_department_name != '') {
-            $department = Department::where('name', '=', $user_department_name)->first();
-
-            if ($department) {
-                $this->log('A matching Department '.$user_department_name.' already exists');
-
-                return $department->id;
-            }
-
-            $department = new Department;
-            $department->name = $user_department_name;
-
-            if ($department->save()) {
-                $this->log('Department '.$user_department_name.' was created');
-
-                return $department->id;
-            }
-            $this->logError($department, 'Department');
+        // Explicit is_null check before the loose equality guard so a null
+        // input doesn't trigger PHP 8.x null-to-string deprecation warnings
+        // (the previous form was `!= ''` which coerces null to '' first).
+        if (is_null($user_department_name) || $user_department_name === '') {
+            return null;
         }
+
+        $department = Department::where('name', $user_department_name)->first();
+
+        if ($department) {
+            $this->log('A matching Department '.$user_department_name.' already exists');
+
+            return $department->id;
+        }
+
+        $department = new Department;
+        $department->name = $user_department_name;
+        // $this->created_by, not auth()->id(), so CLI-run imports
+        // attribute created_by to the --user_id option value rather
+        // than null.
+        $department->created_by = $this->created_by;
+
+        if ($department->save()) {
+            $this->log('Department '.$user_department_name.' was created');
+
+            return $department->id;
+        }
+        $this->logError($department, 'Department');
 
         return null;
     }

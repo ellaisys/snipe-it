@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Assets;
 
+use App\Actions\Acceptances\CreateCheckoutAcceptanceAction;
 use App\Exceptions\CheckoutNotAllowed;
 use App\Helpers\Helper;
 use App\Http\Controllers\Controller;
@@ -44,7 +45,13 @@ class AssetCheckoutController extends Controller
         $asset->setRules($asset->getRules() + $asset->customFieldValidationRules());
 
         if ($asset->isInvalid()) {
-            return redirect()->route('hardware.edit', $asset)->withErrors($asset->getErrors());
+            // Also flash the specific validation messages via
+            // multi_error_messages so they surface in the top alert
+            // on the edit page. See the matching block in
+            // AssetCheckinController::create() for the reasoning.
+            return redirect()->route('hardware.edit', $asset)
+                ->withErrors($asset->getErrors())
+                ->with('multi_error_messages', $asset->getErrors()->all());
         }
 
         if ($asset->availableForCheckout()) {
@@ -84,7 +91,6 @@ class AssetCheckoutController extends Controller
             $admin = auth()->user();
 
             $target = $this->determineCheckoutTarget();
-            session()->put(['checkout_to_type' => $target]);
 
             $asset = $this->updateAssetLocation($asset, $target);
 
@@ -102,9 +108,11 @@ class AssetCheckoutController extends Controller
                 $asset->status_id = $request->input('status_id');
             }
 
-            if ($request->boolean('set_not_requestable')) {
-                $asset->requestable = false;
-            }
+            // Two-way toggle: checked = requestable, unchecked (or absent) =
+            // not. The form pre-populates the checkbox with the asset's current
+            // state so users can flip either direction (e.g. mark "no longer
+            // requestable" during checkout because the item is now assigned).
+            $asset->requestable = $request->boolean('requestable');
 
             if (! empty($asset->licenseseats->all())) {
                 if (request('checkout_to_type') == 'user') {
@@ -153,10 +161,7 @@ class AssetCheckoutController extends Controller
 
                     // If requireAcceptance() is false the listener won't have created one; create it now.
                     if (! $acceptance) {
-                        $acceptance = new CheckoutAcceptance;
-                        $acceptance->checkoutable()->associate($asset);
-                        $acceptance->assignedTo()->associate($target);
-                        $acceptance->save();
+                        $acceptance = CreateCheckoutAcceptanceAction::run($asset, $target);
                     }
 
                     session([
@@ -173,10 +178,17 @@ class AssetCheckoutController extends Controller
                     ->with('success', trans('admin/hardware/message.checkout.success'));
             }
 
-            // Redirect to the asset management page with error
-            return redirect()->route('hardware.checkout.create', $asset)->with('error', trans('admin/hardware/message.checkout.error').$asset->getErrors());
+            // Redirect back to the checkout form with the specific
+            // validation messages surfaced via multi_error_messages
+            // (replaces the previous stringified MessageBag concat).
+            return redirect()->route('hardware.checkout.create', $asset)
+                ->with('error', trans('admin/hardware/message.checkout.error'))
+                ->with('multi_error_messages', $asset->getErrors()->all());
         } catch (ModelNotFoundException $e) {
-            return redirect()->back()->with('error', trans('admin/hardware/message.checkout.error'))->withErrors($asset->getErrors());
+            return redirect()->back()
+                ->with('error', trans('admin/hardware/message.checkout.error'))
+                ->withErrors($asset->getErrors())
+                ->with('multi_error_messages', $asset->getErrors()->all());
         } catch (CheckoutNotAllowed $e) {
             return redirect()->back()->with('error', $e->getMessage());
         }

@@ -472,7 +472,7 @@ class ReportsController extends Controller
     {
         $this->authorize('reports.view');
         $customfields = CustomField::get();
-        $report_templates = ReportTemplate::orderBy('name')->get();
+        $report_templates = ReportTemplate::where('type', 'asset')->orderBy('name')->get();
 
         // The view needs a template to render correctly, even if it is empty...
         $template = new ReportTemplate;
@@ -484,7 +484,7 @@ class ReportsController extends Controller
             $template->options = $request->old();
         }
 
-        return view('reports/custom', [
+        return view('reports.custom.asset', [
             'customfields' => $customfields,
             'report_templates' => $report_templates,
             'template' => $template,
@@ -614,6 +614,10 @@ class ReportsController extends Controller
             if ($request->filled('assigned_to')) {
                 $header[] = trans('admin/hardware/table.checkoutto');
                 $header[] = trans('general.type');
+            }
+
+            if ($request->filled('assigned_asset_tag')) {
+                $header[] = trans('admin/reports/general.custom_export.assigned_asset_tag');
             }
 
             if ($request->filled('username')) {
@@ -785,7 +789,11 @@ class ReportsController extends Controller
                 if ($request->filled('purchase_cost_end')) {
                     $assets->whereBetween('assets.purchase_cost', [$request->input('purchase_cost_start'), $request->input('purchase_cost_end')]);
                 } else {
-                    $assets->where('assets.purchase_cost', '>', $request->input('purchase_cost_start'));
+                    // >= for consistency with the whereBetween branch above,
+                    // which is inclusive on both sides. Previously '>', so a
+                    // user filtering "cost >= 0" got nothing at exactly 0, and
+                    // "cost >= 100" quietly hid assets bought for 100.
+                    $assets->where('assets.purchase_cost', '>=', $request->input('purchase_cost_start'));
                 }
             }
 
@@ -836,7 +844,15 @@ class ReportsController extends Controller
             }
 
             if (($request->filled('last_updated_start')) && ($request->filled('last_updated_end'))) {
-                $assets->whereBetween('assets.updated_at', [$request->input('last_updated_start'), $request->input('last_updated_end')]);
+                // updated_at is a timestamp, not a DATE, so a raw string
+                // whereBetween is silently exclusive on the end side (the picker
+                // returns Y-m-d which MySQL widens to Y-m-d 00:00:00, dropping
+                // everything on the end day after midnight). Match the created_at
+                // handling above and normalize to start/end of day.
+                $last_updated_start = Carbon::parse($request->input('last_updated_start'))->startOfDay();
+                $last_updated_end = Carbon::parse($request->input('last_updated_end'))->endOfDay();
+
+                $assets->whereBetween('assets.updated_at', [$last_updated_start, $last_updated_end]);
             }
 
             if (($request->filled('last_updated_before'))) {
@@ -970,6 +986,14 @@ class ReportsController extends Controller
                     if ($request->filled('assigned_to')) {
                         $row[] = ($asset->assigned) ? $asset->assigned->display_name : '';
                         $row[] = ($asset->assigned) ? $asset->assignedType() : '';
+                    }
+
+                    if ($request->filled('assigned_asset_tag')) {
+                        // #18281: only populated when the assignee is another
+                        // Asset — empty for user/location assignees and for
+                        // unassigned rows, matching how username/email already
+                        // behave when the assignee isn't a user.
+                        $row[] = ($asset->assigned instanceof Asset) ? $asset->assigned->asset_tag : '';
                     }
 
                     if ($request->filled('username')) {
@@ -1209,12 +1233,22 @@ class ReportsController extends Controller
                 trans('admin/maintenances/form.title'),
                 trans('admin/maintenances/form.start_date'),
                 trans('admin/maintenances/form.completion_date'),
+                trans('admin/maintenances/form.completed_at'),
+                trans('admin/maintenances/form.completed_by'),
                 trans('admin/maintenances/form.asset_maintenance_time'),
                 trans('admin/maintenances/form.cost'),
+                trans('admin/maintenances/form.is_warranty'),
+                trans('admin/maintenances/form.notes'),
             ];
             fputcsv($handle, $header);
 
-            Maintenance::with('asset', 'supplier')
+            // No completed-filter here — exports every maintenance, active
+            // or completed. Eager-load the four relations the row loop
+            // dereferences so a 10K-row export doesn't fan out into 40K+
+            // queries. maintenanceType replaces the pre-#19039
+            // `improvement_type` accessor that no longer exists on the
+            // model (would silently write empty cells otherwise).
+            Maintenance::with('asset', 'supplier', 'maintenanceType', 'completedByUser')
                 ->orderBy('created_at', 'DESC')
                 ->chunk(500, function ($maintenances) use ($handle, $formatter) {
                     foreach ($maintenances as $maintenance) {
@@ -1223,15 +1257,19 @@ class ReportsController extends Controller
                             : (int) $maintenance->asset_maintenance_time;
 
                         $row = [
-                            $maintenance->asset->asset_tag,
-                            $maintenance->asset->name,
-                            $maintenance->supplier->name,
-                            $maintenance->improvement_type,
+                            $maintenance->asset?->asset_tag,
+                            $maintenance->asset?->name,
+                            $maintenance->supplier?->name,
+                            $maintenance->maintenanceType?->name,
                             $maintenance->name,
                             $maintenance->start_date,
-                            $maintenance->completion_date,
+                            $maintenance->expected_completion_date,
+                            $maintenance->completed_at,
+                            $maintenance->completedByUser?->display_name,
                             $improvementTime,
                             trans('general.currency').Helper::formatCurrencyOutput($maintenance->cost),
+                            $maintenance->is_warranty ? trans('general.yes') : trans('general.no'),
+                            $maintenance->notes,
                         ];
 
                         if (config('app.escape_formulas') === false) {

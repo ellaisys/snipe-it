@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Licenses;
 
+use App\Actions\Acceptances\CreateCheckoutAcceptanceAction;
 use App\Events\CheckoutableCheckedOut;
 use App\Helpers\Helper;
 use App\Http\Controllers\Controller;
@@ -165,10 +166,7 @@ class LicenseCheckoutController extends Controller
 
                 // If requireAcceptance() is false the listener won't have created one; create it now.
                 if (! $acceptance) {
-                    $acceptance = new CheckoutAcceptance;
-                    $acceptance->checkoutable()->associate($licenseSeat);
-                    $acceptance->assignedTo()->associate($checkoutTarget);
-                    $acceptance->save();
+                    $acceptance = CreateCheckoutAcceptanceAction::run($licenseSeat, $checkoutTarget);
                 }
 
                 session([
@@ -278,7 +276,14 @@ class LicenseCheckoutController extends Controller
 
         $usersQuery = User::whereNull('deleted_at')->where('autoassign_licenses', '=', 1)->with('licenses');
         if (Setting::getSettings()->full_multiple_companies_support && $license->company_id) {
-            $usersQuery->where('company_id', '=', $license->company_id);
+            // Filter to users pivoted to the license's company. The scalar
+            // users.company_id column is deprecated; membership lives in the
+            // company_user pivot only.
+            $usersQuery->whereIn('users.id', function ($sub) use ($license) {
+                $sub->select('user_id')
+                    ->from('company_user')
+                    ->where('company_id', $license->company_id);
+            });
         }
         $users = $usersQuery->get();
         Log::debug($avail_count.' will be assigned');
