@@ -7,6 +7,7 @@ use Database\Seeders\Concerns\ReportsMemory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class DatabaseSeeder extends Seeder
 {
@@ -23,6 +24,27 @@ class DatabaseSeeder extends Seeder
         DB::statement('SET FOREIGN_KEY_CHECKS=0');
 
         $this->reportMemory('DatabaseSeeder start');
+
+        // Wipe every item file in the public uploads dir.
+        // The entity seeders (Asset, User, Location, etc.) already clear
+        // their own image dirs, but these four are one-per-event dirs
+        // that grow indefinitely.
+        foreach ([
+                     'private_uploads/eula-pdfs',
+                     'private_uploads/audits',
+                     'private_uploads/signatures',
+                     'private_uploads/imports',
+                 ] as $accumulatorDir) {
+            if (Storage::exists($accumulatorDir)) {
+                Storage::deleteDirectory($accumulatorDir);
+            }
+        }
+
+        // Not clearing backups here on purpose. spatie/laravel-backup
+        // ships its own age + size cleanup strategy that the scheduler
+        // fires on its own cadence (see config/backup.php cleanup
+        // section), so wiping them on re-seed would fight with the
+        // production garbage-collection path.
 
         // Only create default settings if they do not exist in the db.
         if (! Setting::first()) {
@@ -60,6 +82,16 @@ class DatabaseSeeder extends Seeder
         $this->reportMemory('after DepreciationSeeder (2nd)');
         $this->call(StatuslabelSeeder::class);
         $this->reportMemory('after StatuslabelSeeder');
+
+        // Wipe Orders / OrderItems before any inventory seeder runs so a
+        // re-seed doesn't inherit acquisition rows from the previous
+        // session. The inventory seeders (Accessory / Asset / Component /
+        // Consumable) truncate their own tables but the observer-written
+        // Orders / OrderItems live in a shared polymorphic pair, so we
+        // clear them centrally here.
+        DB::table('order_items')->truncate();
+        DB::table('orders')->truncate();
+
         $this->call(AccessorySeeder::class);
         $this->reportMemory('after AccessorySeeder');
         $this->call(AssetSeeder::class);

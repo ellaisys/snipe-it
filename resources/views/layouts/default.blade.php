@@ -270,6 +270,7 @@
                                     <a href="#" class="dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                                         @if (auth()->user()->present()->gravatar())
                                             <img src="{{ Auth::user()->present()->gravatar() }}" class="user-image"
+                                                 referrerpolicy="no-referrer"
                                                  alt="">
                                         @else
                                             <x-icon type="user" />
@@ -306,7 +307,7 @@
                                         @can('self.profile')
                                         <li {!! (request()->is('account/accept') ? ' class="active" aria-current="page"' : '') !!}>
                                             <a href="{{ route('account.accept') }}">
-                                                <x-icon type="checkmark" class="fa-fw" />
+                                                <x-icon type="signature" class="fa-fw"/>
                                                 {{ trans('general.accept_assets_menu') }}
                                             </a>
                                         </li>
@@ -394,7 +395,7 @@
                             </li>
                         @endcan
                         @can('index', \App\Models\Asset::class)
-                            <li class="treeview{{ ((request()->is('statuslabels/*') || request()->is(['hardware*', 'maintenances*'])) ? ' active' : '') }}">
+                                <li class="treeview{{ ((request()->is('statuslabels/*') || request()->is('hardware*')) ? ' active' : '') }}">
                                 <a href="#">
                                     <x-icon type="assets" class="fa-fw" />
                                     <span>{{ trans('general.assets') }}</span>
@@ -417,7 +418,7 @@
                                             <li{!! (request()->is('statuslabels/'.$status_nav->id) ? ' class="active" aria-current="page"' : '') !!}>
                                                 <a href="{{ route('statuslabels.show', ['statuslabel' => $status_nav->id]) }}">
                                                     <i class="fas fa-circle text-grey fa-fw"
-                                                       aria-hidden="true"{!!  ($status_nav->color!='' ? ' style="color: '.e($status_nav->color).'"' : '') !!}></i>
+                                                       aria-hidden="true"{!! ($status_nav->color != '' ? ' style="color: '.e($status_nav->color).'"' : '') !!}></i>
                                                     {{ $status_nav->name }}
                                                     <span class="badge badge-secondary">{{ $status_nav->asset_count }}</span></a></li>
                                         @endforeach
@@ -511,21 +512,12 @@
                                                 {{ trans('general.bulk_checkout') }}
                                             </a>
                                         </li>
-                                        <li{!! (request()->is('hardware/requested') ? ' class="active" aria-current="page"' : '') !!}>
-                                            <a href="{{ route('assets.requested') }}">
-                                                {{ trans('general.requested') }}</a>
-                                        </li>
                                     @endcan
 
                                     @can('create', \App\Models\Asset::class)
                                         <li{!! (request()->query('status_type') == 'Deleted' ? ' class="active" aria-current="page"' : '') !!}>
                                             <a href="{{ url('hardware?status_type=Deleted') }}">
                                                 {{ trans('general.deleted') }}
-                                            </a>
-                                        </li>
-                                        <li {!! (request()->is('maintenances') ? ' class="active" aria-current="page"' : '') !!}>
-                                            <a href="{{ route('maintenances.index') }}">
-                                                {{ trans('general.maintenances') }}
                                             </a>
                                         </li>
                                     @endcan
@@ -538,8 +530,42 @@
                                     @endcan
 
                                 </ul>
-                            </li>
-                        @endcan
+                                </li>
+                            @endcan
+                            {{-- Dedicated Maintenances section. Treeview parent
+                                 so "list all" and Maintenance Types share one
+                                 visual home. The @if guard OR's the two
+                                 governing permissions so a user with either
+                                 can see the parent. --}}
+                            @if (Gate::allows('view', \App\Models\Asset::class) || Gate::allows('index', \App\Models\MaintenanceType::class))
+                                <li class="treeview{{ (request()->is('maintenances*') || request()->is('maintenance-types*')) ? ' active' : '' }}">
+                                    <a href="#">
+                                        <x-icon type="maintenances" class="fa-fw"/>
+                                        <span>{{ trans('general.maintenances') }}</span>
+                                        <x-icon type="angle-left" class="pull-right fa-fw"/>
+                                    </a>
+                                    <ul class="treeview-menu">
+                                        @can('view', \App\Models\Asset::class)
+                                            <li{!! (request()->is('maintenances') ? ' class="active" aria-current="page"' : '') !!}>
+                                            <a href="{{ route('maintenances.index') }}">
+                                                <x-icon type="circle" class="text-grey fa-fw"/>
+                                                {{ trans('general.list_all') }}
+                                            </a>
+                                        </li>
+                                    @endcan
+                                        @can('index', \App\Models\MaintenanceType::class)
+                                            <li{!! (request()->is('maintenance-types*') ? ' class="active" aria-current="page"' : '') !!}>
+                                                <a href="{{ route('maintenance-types.index') }}">
+                                                    <x-icon type="circle" class="text-grey fa-fw"/>
+                                                    {{ trans('admin/maintenance_types/general.maintenance_types') }}
+                                            </a>
+                                        </li>
+                                    @endcan
+                                </ul>
+                                </li>
+                            @endif
+
+
                         @can('view', \App\Models\License::class)
                             <li{!! (request()->is('licenses*') ? ' class="active" aria-current="page"' : '') !!}>
                                 <a href="{{ route('licenses.index') }}">
@@ -629,6 +655,14 @@
                                     </ul>
                                 </li>
                         @endcan
+                            @can('canViewUsersAndCheckoutables')
+                                <li{!! (request()->routeIs('calendar.index') ? ' class="active" aria-current="page"' : '') !!}>
+                                    <a href="{{ route('calendar.index') }}">
+                                        <x-icon type="calendar" class="fa-fw"/>
+                                        <span>{{ trans('general.calendar') }}</span>
+                                    </a>
+                                </li>
+                            @endcan
                         @can('import')
                             <li id="import-sidenav-option"{!! (request()->is('import*') ? ' class="active" aria-current="page"' : '') !!}>
                                 <a href="{{ route('imports.index') }}">
@@ -760,6 +794,11 @@
                                             {{ trans('general.custom_component_report') }}
                                         </a>
                                     </li>
+                                    <li {!! (request()->routeIs('reports.custom.consumable') ? ' class="active" aria-current="page"' : '') !!}>
+                                        <a href="{{ route('reports.custom.consumable') }}">
+                                            {{ trans('general.custom_consumable_report') }}
+                                        </a>
+                                    </li>
                                     <li {!! (request()->is('reports/audit') ? ' class="active" aria-current="page"' : '') !!}>
                                         <a href="{{ route('reports.audit') }}">
                                             {{ trans('general.audit_report') }}</a>
@@ -792,10 +831,18 @@
                                 </ul>
                             </li>
                         @endcan
+                            @can('canCheckoutAtLeastOneItemType')
+                                <li{!! (request()->is('requests.index') ? ' class="active" aria-current="page"' : '') !!}>
+                                    <a href="{{ route('requests.index') }}">
+                                        <i class="fa-solid fa-boxes-packing"></i>
+                                        <span>{{ trans('general.pending_requests') }}</span>
+                                    </a>
+                                </li>
+                            @endcan
 
                         @can('viewRequestable', \App\Models\Asset::class)
-                            <li{!! (request()->is('account/requestable-assets') ? ' class="active" aria-current="page"' : '') !!}>
-                                <a href="{{ route('requestable-assets') }}">
+                            <li{!! (request()->is('account/requestable') ? ' class="active" aria-current="page"' : '') !!}>
+                                <a href="{{ route('account.requestable') }}">
                                     <x-icon type="requestable" class="fa-fw" />
                                     <span>{{ trans('general.requestable_items') }}</span>
                                 </a>
@@ -1067,11 +1114,13 @@
 
             // Reference: https://jqueryvalidation.org/validate/
             //
-            // Two form-ids get the same validator: `create-form` is the default
-            // id emitted by the form blade component, and `checkout_form` is
-            // the anti-double-submit id used by the six checkout flows. Both
-            // need the same error styling + select2 error placement, so we
-            // init in a loop instead of duplicating the options block.
+            // A handful of form-ids get the same validator: `create-form` is
+            // the default id emitted by the form blade component, `checkout_form`
+            // is the anti-double-submit id used by the six checkout flows, and
+            // the sync-adapter tabs each render their own form as
+            // `adapter-form-<slug>`. Everyone needs the same error styling +
+            // select2 error placement, so we init in a loop instead of
+            // duplicating the options block.
             var snipeValidatorOptions = {
                 ignore: 'input[type=hidden]',
                 errorClass: 'alert-msg',
@@ -1119,7 +1168,7 @@
 
             };
 
-            $('#create-form, #checkout_form, #userForm').each(function () {
+            $('#create-form, #checkout_form, #userForm, #adjustQuantityForm, form[id^="adapter-form-"]').each(function () {
                 $(this).validate(snipeValidatorOptions);
             });
 

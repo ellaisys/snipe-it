@@ -20,7 +20,7 @@ class ConsumableImporter extends ItemImporter
         // pattern: absent CSV columns stay out of $this->item so update mode
         // preserves the DB value, and present-but-empty cells land as null
         // so update mode clears the DB value. The base sanitize's reject-empty
-        // pass is suppressed via the sanitizeItemForStoring override below.
+        // pass is disabled by $rejectEmptyOnUpdate on ItemImporter.
         $this->item = [];
 
         // Shared lookup fields. Present-and-empty clears the FK; absent
@@ -50,7 +50,9 @@ class ConsumableImporter extends ItemImporter
 
         $this->setItemFromCsvIfPresent($row, 'name', 'item_name');
         $this->setItemFromCsvIfPresent($row, 'notes');
-        $this->setItemFromCsvIfPresent($row, 'order_number');
+        // order_number is not on the Consumable model any more — recorded
+        // as an Order + OrderItem via recordOrderForImportedRow() after
+        // the create-branch save below.
         $this->setItemFromCsvIfPresent($row, 'purchase_cost');
         $this->setItemFromCsvIfPresent($row, 'model_number');
         $this->setItemFromCsvIfPresent($row, 'min_amt');
@@ -67,6 +69,20 @@ class ConsumableImporter extends ItemImporter
             }
         }
 
+        // Mirror supplier_id / purchase_cost into the parent's
+        // default_* template fields so future orders pre-populate from
+        // the last-known-good CSV import. See Consumable::$fillable and
+        // ItemImporter::recordOrderForImportedRow for the split — Order
+        // rows still receive supplier_id / purchase_cost via that helper
+        // (that's the per-acquisition record); default_* here is the
+        // per-parent template.
+        if (array_key_exists('supplier_id', $this->item)) {
+            $this->item['default_supplier_id'] = $this->item['supplier_id'];
+        }
+        if (array_key_exists('purchase_cost', $this->item)) {
+            $this->item['default_purchase_cost'] = $this->item['purchase_cost'];
+        }
+
         // Internal signals for the checkout logic; neither is fillable on
         // Consumable so sanitize's fillable filter drops them.
         $this->item['checkout_class'] = $this->findCsvMatch($row, 'checkout_class');
@@ -74,17 +90,6 @@ class ConsumableImporter extends ItemImporter
         $this->item['created_by'] = $this->created_by;
 
         $this->createConsumableIfNotExists($row);
-    }
-
-    /**
-     * Override the base sanitize to skip the reject-empty pass. See handle()
-     * above for the matching item-population.
-     *
-     * @SuppressWarnings(PHPMD.UnusedFormalParameter)
-     */
-    protected function sanitizeItemForStoring($model, $updating = false)
-    {
-        return collect($this->item)->only($model->getFillable())->toArray();
     }
 
     /**
@@ -111,8 +116,10 @@ class ConsumableImporter extends ItemImporter
                 return;
             }
             $this->log('Updating Consumable');
-            $consumable->update($this->sanitizeItemForUpdating($consumable));
-            // update() already saves the model, no need to call save() again while Model::unguard() is active
+            // qty routes through adjustQuantity so a CSV qty change
+            // becomes a QuantityAdjust log entry, matching the API
+            // update contract.
+            $this->applyUpdateWithQtyAdjust($consumable, $this->sanitizeItemForUpdating($consumable));
             $consumable->setImported(true);
             $this->recordUpdated();
 
@@ -131,6 +138,7 @@ class ConsumableImporter extends ItemImporter
         if ($consumable->save()) {
             $this->log('Consumable '.$name.' was created');
             $this->recordCreated();
+            $this->recordOrderForImportedRow($consumable, $row);
 
             $this->maybeCheckoutConsumable($consumable);
 
@@ -189,5 +197,6 @@ class ConsumableImporter extends ItemImporter
         ));
 
         $this->log('Consumable '.$consumable->name.' checked out to '.($target->username ?? $target->id));
+        $this->maybeSendWelcomeEmail($target);
     }
 }

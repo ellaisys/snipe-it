@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\FileStorage;
 use App\Helpers\StorageHelper;
 use App\Http\Requests\UploadFileRequest;
 use App\Models\Actionlog;
@@ -44,11 +45,6 @@ class UploadedFilesController extends Controller
 
         if (! $object) {
             return redirect()->back()->withFragment('files')->with('error', trans('general.file_upload_status.invalid_object'));
-        }
-
-        // If the file storage directory doesn't exist, create it
-        if (! Storage::exists(parent::getMapStoragePath()[$object_type])) {
-            Storage::makeDirectory(parent::getMapStoragePath()[$object_type], 775);
         }
 
         if ($request->hasFile('file')) {
@@ -146,9 +142,24 @@ class UploadedFilesController extends Controller
             ->where('item_id', $object->id)->first();
 
         if ($log) {
-            // Check the file actually exists, and delete it
+            // Check the file actually exists, and delete it.
+            //
+            // Storage::delete returns false on silent delete failures on
+            // non-throwing filesystem drivers. Ignoring the return let a
+            // failed physical delete produce an "upload deleted" action-log
+            // entry, which HasUploads::uploads uses to exclude the row from
+            // normal listings. Net effect: bytes still on disk, action log
+            // shows the file as deleted, admin sees a success response, and
+            // the file is invisible through the ordinary UI. Refuse to log
+            // the deletion when the physical delete did not succeed.
+            // Reported by Christopher Finks (christopherfi-dev) on
+            // 2026-08-02.
             if (Storage::exists(parent::getMapStoragePath()[$object_type].$log->filename)) {
-                Storage::delete(parent::getMapStoragePath()[$object_type].$log->filename);
+                if (! Storage::delete(parent::getMapStoragePath()[$object_type].$log->filename)) {
+                    \Log::warning('File storage delete failed for '.$log->filename.' on '.parent::getMapObjectType()[$object_type].' id '.$id);
+
+                    return redirect()->back()->withFragment('files')->with('error', trans_choice('general.file_upload_status.delete.error', 1));
+                }
             }
             // Delete the record of the file
             if ($log->logUploadDelete($object, $log->filename)) {
@@ -173,13 +184,20 @@ class UploadedFilesController extends Controller
                 return redirect()->back()->with('error', trans('general.file_upload_status.file_not_found'));
             }
 
-            if (config('filesystems.default') == 's3_private') {
-                return redirect()->away(Storage::disk('s3_private')->temporaryUrl('private_uploads/imports/'.$import->file_path, now()->addMinutes(5)));
+            $storedPath = FileStorage::Imports->privateStorageKey().$import->file_path;
+            if (! Storage::exists($storedPath)) {
+                return redirect()->back()->with('error', trans('general.file_upload_status.file_not_found'));
             }
 
-            if (Storage::exists('private_uploads/imports/'.$import->file_path)) {
-                return response()->download(config('app.private_uploads').'/imports/'.$import->file_path);
+            $defaultDisk = config('filesystems.default');
+            if (config("filesystems.disks.$defaultDisk.driver") === 's3') {
+                return redirect()->away(Storage::temporaryUrl($storedPath, now()->addMinutes(5), [
+                    'ResponseContentType' => 'application/octet-stream',
+                    'ResponseContentDisposition' => 'attachment; filename="'.basename($import->file_path).'"',
+                ]));
             }
+
+            return response()->download(Storage::path($storedPath));
 
         }
 

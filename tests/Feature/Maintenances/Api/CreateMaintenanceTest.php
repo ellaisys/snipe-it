@@ -55,7 +55,8 @@ class CreateMaintenanceTest extends TestCase
         Storage::disk('public')->assertExists(app('maintenances_path').$maintenance->image);
 
         $this->assertDatabaseHas('maintenances', [
-            'asset_id' => $asset->id,
+            'item_id' => $asset->id,
+            'item_type' => \App\Models\Asset::class,
             'supplier_id' => $supplier->id,
             'maintenance_type_id' => $type->id,
             'asset_maintenance_type' => $type->name,
@@ -70,6 +71,35 @@ class CreateMaintenanceTest extends TestCase
         ]);
 
         $this->assertHasTheseActionLogs($maintenance, ['create']);
+    }
+    
+    public function test_create_maintenance_action_log_carries_notes()
+    {
+        $actor = User::factory()->superuser()->create();
+        $asset = Asset::factory()->create();
+        $type = MaintenanceType::factory()->create();
+
+        $this->actingAsForApi($actor)
+            ->postJson(route('api.maintenances.store'), [
+                'name' => 'With Notes',
+                'asset_id' => $asset->id,
+                'maintenance_type_id' => $type->id,
+                'start_date' => '2026-01-01',
+                'is_warranty' => 0,
+                'notes' => 'field noise on power-on',
+            ])
+            ->assertOk()
+            ->assertJsonPath('status', 'success');
+
+        $maintenance = Maintenance::where('name', 'With Notes')->firstOrFail();
+
+        $log = \App\Models\Actionlog::query()
+            ->where('item_type', Maintenance::class)
+            ->where('item_id', $maintenance->id)
+            ->where('action_type', 'create')
+            ->firstOrFail();
+
+        $this->assertSame('field noise on power-on', $log->note);
     }
 
     public function test_bulk_create_creates_one_maintenance_per_asset()
@@ -93,7 +123,8 @@ class CreateMaintenanceTest extends TestCase
         foreach ($assets as $asset) {
             $this->assertDatabaseHas('maintenances', [
                 'name' => 'Bulk Test',
-                'asset_id' => $asset->id,
+                'item_id' => $asset->id,
+                'item_type' => \App\Models\Asset::class,
                 'maintenance_type_id' => $type->id,
             ]);
         }
@@ -122,8 +153,8 @@ class CreateMaintenanceTest extends TestCase
             ->assertJsonPath('status', 'success')
             ->assertJsonPath('payload.total', 1);
 
-        $this->assertDatabaseHas('maintenances', ['asset_id' => $ownAsset->id, 'name' => 'FMCS Bulk Test']);
-        $this->assertDatabaseMissing('maintenances', ['asset_id' => $otherAsset->id, 'name' => 'FMCS Bulk Test']);
+        $this->assertDatabaseHas('maintenances', ['item_id' => $ownAsset->id, 'item_type' => \App\Models\Asset::class, 'name' => 'FMCS Bulk Test']);
+        $this->assertDatabaseMissing('maintenances', ['item_id' => $otherAsset->id, 'item_type' => \App\Models\Asset::class, 'name' => 'FMCS Bulk Test']);
     }
 
     public function test_bulk_create_returns_error_when_all_assets_inaccessible()

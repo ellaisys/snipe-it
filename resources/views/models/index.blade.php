@@ -15,8 +15,9 @@
 {{-- Page content --}}
 @section('content')
     <x-container>
-        <x-box name="models">
+        <x-box name="models" sr_only_title>
 
+            <x-slot:table_header>{{ trans('general.asset_models') }}</x-slot:table_header>
 
             <x-slot:bulkactions>
                 <x-table.bulk-models />
@@ -30,7 +31,6 @@
                     buttons="modelButtons"
                     fixed_right_number="2"
                     fixed_number="1"
-                    use_sticky_css
                     toolbar_id="modelsToolbar"
                     api_url="{{ route('api.models.index', ['status' => e(request('status'))]) }}"
                     :presenter="\App\Presenters\AssetModelPresenter::dataTableLayout()"
@@ -38,6 +38,7 @@
             />
 
         </x-box>
+        <x-shiftclick/>
     </x-container>
 @stop
 

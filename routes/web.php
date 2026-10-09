@@ -10,6 +10,7 @@ use App\Http\Controllers\BulkCategoriesController;
 use App\Http\Controllers\BulkCompaniesController;
 use App\Http\Controllers\BulkDepartmentsController;
 use App\Http\Controllers\BulkDepreciationsController;
+use App\Http\Controllers\BulkMaintenanceTypesController;
 use App\Http\Controllers\BulkManufacturersController;
 use App\Http\Controllers\BulkStatuslabelsController;
 use App\Http\Controllers\BulkSuppliersController;
@@ -28,6 +29,7 @@ use App\Http\Controllers\NotesController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\QrCodeController;
 use App\Http\Controllers\Reports\CustomComponentReportController;
+use App\Http\Controllers\Reports\CustomConsumableReportController;
 use App\Http\Controllers\ReportsController;
 use App\Http\Controllers\ReportTemplatesController;
 use App\Http\Controllers\SettingsController;
@@ -38,8 +40,9 @@ use App\Http\Controllers\SuppliersController;
 use App\Http\Controllers\UploadedFilesController;
 use App\Http\Controllers\ViewAssetsController;
 use App\Livewire\Importer;
-use App\Mail\CheckoutComponentMail;
+use App\Models\MaintenanceType;
 use App\Models\ReportTemplate;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Tabuna\Breadcrumbs\Trail;
 
@@ -99,6 +102,16 @@ Route::middleware(['web', 'auth', 'authorize:superuser'])->prefix('oauth')->grou
 
 Route::group(['middleware' => 'auth'], function () {
     /*
+    * Calendar (unified view across every HasCalendarEvents source).
+    * Companion API endpoint lives at /api/v1/calendar/events.
+    */
+    Route::get('calendar', [App\Http\Controllers\CalendarEventsController::class, 'index'])
+        ->name('calendar.index')
+        ->breadcrumbs(fn (Tabuna\Breadcrumbs\Trail $trail) => $trail->parent('home')
+            ->push(trans('general.calendar'), route('calendar.index'))
+        );
+
+    /*
     * Companies
     */
     Route::resource('companies', CompaniesController::class, [
@@ -116,6 +129,13 @@ Route::group(['middleware' => 'auth'], function () {
 
     Route::post('categories/bulk/delete', [BulkCategoriesController::class, 'destroy'])->name('categories.bulk.delete');
 
+    Route::post('categories/bulk/edit', [BulkCategoriesController::class, 'edit'])
+        ->name('categories.bulk.edit')
+        ->breadcrumbs(fn (Trail $trail) => $trail->parent('categories.index', route('categories.index'))
+            ->push(trans('general.bulk_edit'), route('categories.index')));
+
+    Route::post('categories/bulk/save', [BulkCategoriesController::class, 'update'])->name('categories.bulk.save');
+
     /*
     * Labels
     */
@@ -124,11 +144,6 @@ Route::group(['middleware' => 'auth'], function () {
         [LabelsController::class, 'show']
     )->where('labelName', '.*')->name('labels.show');
 
-    Route::get('/test-email', function () {
-        $mailable = new CheckoutComponentMail;
-
-        return $mailable->render(); // dumps HTML
-    });
     /*
     * Manufacturers
     */
@@ -152,8 +167,51 @@ Route::group(['middleware' => 'auth'], function () {
 
     /*
     * Maintenance Types
+    *
+    * Expanded from a Route::resource so per-route breadcrumbs can hang
+    * off each GET action. The four GET routes get an explicit
+    * ->breadcrumbs(); the write routes (POST / PUT / PATCH / DELETE)
+    * don't render a page and don't need trails. Route names match what
+    * Route::resource('maintenance-types', ...) would have generated so
+    * every existing route() lookup keeps working.
     */
-    Route::resource('maintenance-types', MaintenanceTypesController::class);
+    Route::get('maintenance-types', [MaintenanceTypesController::class, 'index'])
+        ->name('maintenance-types.index')
+        ->breadcrumbs(fn (Trail $trail) => $trail->parent('maintenances.index')
+            ->push(trans('admin/maintenance_types/general.maintenance_types'), route('maintenance-types.index'))
+        );
+
+    Route::get('maintenance-types/create', [MaintenanceTypesController::class, 'create'])
+        ->name('maintenance-types.create')
+        ->breadcrumbs(fn (Trail $trail) => $trail->parent('maintenance-types.index')
+            ->push(trans('admin/maintenance_types/general.create'))
+        );
+
+    Route::post('maintenance-types', [MaintenanceTypesController::class, 'store'])
+        ->name('maintenance-types.store');
+
+    Route::get('maintenance-types/{maintenance_type}', [MaintenanceTypesController::class, 'show'])
+        ->name('maintenance-types.show')
+        ->breadcrumbs(fn (Trail $trail, MaintenanceType $maintenanceType) => $trail->parent('maintenance-types.index')
+            ->push($maintenanceType->name, route('maintenance-types.show', $maintenanceType))
+        );
+
+    Route::get('maintenance-types/{maintenance_type}/edit', [MaintenanceTypesController::class, 'edit'])
+        ->name('maintenance-types.edit')
+        ->breadcrumbs(fn (Trail $trail, MaintenanceType $maintenanceType) => $trail->parent('maintenance-types.show', $maintenanceType)
+            ->push(trans('admin/maintenance_types/general.update'))
+        );
+
+    Route::put('maintenance-types/{maintenance_type}', [MaintenanceTypesController::class, 'update'])
+        ->name('maintenance-types.update');
+
+    Route::patch('maintenance-types/{maintenance_type}', [MaintenanceTypesController::class, 'update']);
+
+    Route::delete('maintenance-types/{maintenance_type}', [MaintenanceTypesController::class, 'destroy'])
+        ->name('maintenance-types.destroy');
+
+    Route::post('maintenance-types/bulk/delete', [BulkMaintenanceTypesController::class, 'destroy'])
+        ->name('maintenance-types.bulk.delete');
 
     /*
     * Depreciations
@@ -265,13 +323,46 @@ Route::group(['prefix' => 'admin', 'middleware' => ['auth', 'authorize:superuser
     Route::post('notifications', [SettingsController::class, 'postAlerts'])
         ->name('settings.alerts.save');
 
-    Route::get('slack', [SettingsController::class, 'getSlack'])
-        ->name('settings.slack.index')
+    Route::get('integrations', [SettingsController::class, 'getIntegrations'])
+        ->name('settings.integrations.index')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('settings.index')
-            ->push(trans('admin/settings/general.webhook_title'), route('settings.slack.index')));
+            ->push(trans('admin/settings/general.webhook_title'), route('settings.integrations.index')));
 
-    Route::post('slack', [SettingsController::class, 'postSlack'])
-        ->name('settings.slack.save');
+    Route::get('adapters', [SettingsController::class, 'getAdapters'])
+        ->name('settings.adapters.index')
+        ->breadcrumbs(fn (Trail $trail) => $trail->parent('settings.index')
+            ->push(trans('admin/settings/sync_adapters.title'), route('settings.adapters.index')));
+
+    Route::post('adapters', [SettingsController::class, 'postCreateAdapterInstance'])
+        ->name('settings.adapters.create');
+
+    Route::post('adapters/{instance}', [SettingsController::class, 'postAdapterConfig'])
+        ->name('settings.adapters.save')
+        ->missing(fn () => abort(404));
+
+    Route::post('adapters/{instance}/sync', [SettingsController::class, 'postAdapterSync'])
+        ->name('settings.adapters.sync')
+        ->missing(fn () => abort(404));
+
+    Route::post('adapters/{instance}/push', [SettingsController::class, 'postAdapterPush'])
+        ->name('settings.adapters.push')
+        ->missing(fn () => abort(404));
+
+    Route::post('adapters/{instance}/refresh-groups', [SettingsController::class, 'postAdapterRefreshGroups'])
+        ->name('settings.adapters.refresh_groups')
+        ->missing(fn () => abort(404));
+
+    Route::post('adapters/{instance}/refresh-custom-fields', [SettingsController::class, 'postAdapterRefreshCustomFields'])
+        ->name('settings.adapters.refresh_custom_fields')
+        ->missing(fn () => abort(404));
+
+    Route::post('adapters/{instance}/clone', [SettingsController::class, 'postCloneAdapterInstance'])
+        ->name('settings.adapters.clone')
+        ->missing(fn () => abort(404));
+
+    Route::delete('adapters/{instance}', [SettingsController::class, 'deleteAdapterInstance'])
+        ->name('settings.adapters.destroy')
+        ->missing(fn () => abort(404));
 
     Route::get('asset_tags', [SettingsController::class, 'getAssetTags'])
         ->name('settings.asset_tags.index')
@@ -285,9 +376,22 @@ Route::group(['prefix' => 'admin', 'middleware' => ['auth', 'authorize:superuser
         ->name('settings.labels.index')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('settings.index')
             ->push(trans('admin/settings/general.labels_title'), route('settings.labels.index')));
+    Route::get('labels/customizer-preview/{labelName}', [LabelsController::class, 'customLabelPreview']
+    )->where('labelName', '.*')->name('labels.customizer-preview');
 
     Route::post('labels', [SettingsController::class, 'postLabels'])
         ->name('settings.labels.save');
+
+    Route::get('/settings/labels/create', [LabelsController::class, 'create'])
+        ->name('settings.labels.create');
+    Route::get('/settings/labels/{label}/edit', [LabelsController::class, 'edit'])
+        ->name('settings.labels.edit');
+    Route::post('/settings/labels', [LabelsController::class, 'store'])
+        ->name('settings.labels.store');
+    Route::put('/settings/labels/{label}', [LabelsController::class, 'update'])
+        ->name('settings.labels.update');
+    Route::delete('settings/labels/{label}', [LabelsController::class, 'destroy'])
+        ->name('settings.labels.destroy');
 
     Route::get('ldap', [SettingsController::class, 'getLdapSettings'])
         ->name('settings.ldap.index')
@@ -480,10 +584,16 @@ Route::group(['prefix' => 'account', 'middleware' => ['auth']], function () {
             ->push(trans('general.requested_assets_menu'), route('account.requested')));
 
     Route::get(
-        'requestable-assets', [ViewAssetsController::class, 'getRequestableIndex'])
-        ->name('requestable-assets')
+        'requestable', [ViewAssetsController::class, 'getRequestableIndex'])
+        ->name('account.requestable')
         ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
-            ->push(trans('general.requestable_items'), route('requestable-assets')));
+            ->push(trans('general.requestable_items'), route('account.requestable')));
+
+    // Legacy /account/requestable-assets URL. Now covers every
+    // requestable item type (accessories, consumables, components,
+    // licenses, models), not just assets - route + name moved to
+    // /account/requestable. 301 keeps external bookmarks working.
+    Route::redirect('requestable-assets', '/account/requestable', 301);
 
     Route::post('request-asset/{asset}', [ViewAssetsController::class, 'store'])
         ->name('account.request-asset');
@@ -491,9 +601,23 @@ Route::group(['prefix' => 'account', 'middleware' => ['auth']], function () {
     Route::post('request-asset/{asset}/cancel', [ViewAssetsController::class, 'destroy'])
         ->name('account.request-asset.cancel');
 
-    Route::post('request/{itemType}/{itemId}/{cancel_by_admin?}/{requestingUser?}', [ViewAssetsController::class, 'getRequestItem'])
+    // Accepts POST (from the /account/requestable request-item form)
+    // AND DELETE (from the shared dataConfirmModal on /requests
+    // where the admin cancel-request button pipes through the same
+    // handler as every other delete confirmation flow). Same
+    // controller for both - the request itself is idempotent so the
+    // verb choice is a wiring convenience.
+    //
+    // Optional requestingUser segment carries the target user id
+    // when an admin is canceling on behalf of someone else.
+    // Omitted / equal to auth id → self-cancel. Distinct id →
+    // admin-cancel, re-authorized server-side against the caller's
+    // admin role. The old cancel_by_admin flag was dropped from the
+    // URL since the same information falls out of that comparison
+    // (see getRequestItem for the inference).
+    Route::match(['post', 'delete'], 'request/{itemType}/{itemId}/{requestingUser?}', [ViewAssetsController::class, 'getRequestItem'])
         ->name('account/request-item')
-        ->where('itemType', 'asset|asset_model|accessory');
+        ->where('itemType', 'asset|asset_model|accessory|consumable|component|license');
 
     Route::get(
         'display-sig/{filename}',
@@ -542,6 +666,26 @@ Route::group(['prefix' => 'account', 'middleware' => ['auth']], function () {
 
 Route::group(['middleware' => ['auth']], function () {
     Route::post('notes', [NotesController::class, 'store'])->name('notes.store');
+});
+
+// Admin queue of open checkout requests across every requestable
+// item type (assets, accessories, consumables, components, licenses,
+// models). Lived under /hardware/requested back when only assets
+// could be requested; moved here now that the queue is polymorphic.
+// The legacy /hardware/requested URL still 301s here for existing
+// bookmarks (see routes/web/hardware.php). Controller method still
+// lives on AssetsController for now; move to a dedicated
+// RequestsController when the surrounding request-workflow refactor
+// lands.
+Route::group(['middleware' => ['auth']], function () {
+    Route::get('requests', [\App\Http\Controllers\Assets\AssetsController::class, 'getRequestedIndex'])
+        ->name('requests.index')
+        ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+            ->push(trans('general.pending_requests'), route('requests.index'))
+        );
+
+    Route::post('requests/bulk-cancel', [\App\Http\Controllers\Assets\AssetsController::class, 'bulkCancelRequests'])
+        ->name('requests.bulk-cancel');
 });
 
 Route::group(['prefix' => 'reports', 'middleware' => ['auth']], function () {
@@ -623,6 +767,15 @@ Route::group(['prefix' => 'reports', 'middleware' => ['auth']], function () {
 
         Route::post('component', [CustomComponentReportController::class, 'run'])
             ->name('reports.custom.component.run');
+
+        Route::get('consumable', [CustomConsumableReportController::class, 'show'])
+            ->name('reports.custom.consumable')
+            ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
+                ->push(trans('general.reports'), route('reports.index'))
+                ->push(trans('general.custom_consumable_report'), route('reports.custom.consumable')));
+
+        Route::post('consumable', [CustomConsumableReportController::class, 'run'])
+            ->name('reports.custom.consumable.run');
     });
 
     Route::prefix('templates')
@@ -635,27 +788,34 @@ Route::group(['prefix' => 'reports', 'middleware' => ['auth']], function () {
             Route::get('/{reportTemplate}', [ReportTemplatesController::class, 'show'])
                 ->name('report-templates.show')
                 ->breadcrumbs(function (Trail $trail, ReportTemplate $reportTemplate) {
+                    // 'asset' folds into the default since it maps to the
+                    // same breadcrumb parent. Component / consumable have
+                    // their own custom-report parents.
                     $parent = match ($reportTemplate->type) {
-                        'asset' => 'reports/custom',
                         'component' => 'reports.custom.component',
+                        'consumable' => 'reports.custom.consumable',
+                        default => 'reports/custom',
                     };
 
                     return $trail->parent($parent)
-                        ->push($reportTemplate->name, null)
-                        ->push(trans('general.customize_report'), '');
+                        ->push($reportTemplate->name, null);
                 });
 
             Route::get('/{reportTemplate}/edit', [ReportTemplatesController::class, 'edit'])
                 ->name('report-templates.edit')
                 ->breadcrumbs(function (Trail $trail, ReportTemplate $reportTemplate) {
+                    // 'asset' folds into the default since it maps to the
+                    // same breadcrumb parent. Component / consumable have
+                    // their own custom-report parents.
                     $parent = match ($reportTemplate->type) {
-                        'asset' => 'reports/custom',
                         'component' => 'reports.custom.component',
+                        'consumable' => 'reports.custom.consumable',
+                        default => 'reports/custom',
                     };
 
                     return $trail->parent($parent)
                         ->push($reportTemplate->name, route('report-templates.show', $reportTemplate))
-                        ->push(trans('general.customize_report'), '');
+                        ->push(trans('general.update'), '');
                 });
 
             Route::post('/{reportTemplate}', [ReportTemplatesController::class, 'update'])
@@ -668,18 +828,40 @@ Route::group(['prefix' => 'reports', 'middleware' => ['auth']], function () {
     Route::get(
         'activity', [ReportsController::class, 'getActivityReport'])
         ->name('reports.activity')
-        ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
-            ->push(trans('general.reports'), route('reports.index'))
-            ->push(trans('general.activity_report'), route('reports.activity')));
+        // Scoped viewers reach this page through the dashboard Recent
+        // Activity widget's View-all button but do not hold reports.view,
+        // so a "Reports" middle crumb linking to reports.index would 403
+        // on click. Emit it only when the caller can reach reports.index.
+        // Trail has no ->when() helper, so use a plain if inside a
+        // multi-line closure.
+        ->breadcrumbs(function (Trail $trail) {
+            $trail->parent('home');
+            if (Gate::allows('reports.view')) {
+                $trail->push(trans('general.reports'), route('reports.index'));
+            }
+            $trail->push(trans('general.activity_report'), route('reports.activity'));
+
+            return $trail;
+        });
 
     Route::post('activity', [ReportsController::class, 'postActivityReport'])
         ->name('reports.activity.post');
 
     Route::get('unaccepted_assets/{deleted?}', [ReportsController::class, 'getAssetAcceptanceReport'])
         ->name('reports/unaccepted_assets')
-        ->breadcrumbs(fn (Trail $trail) => $trail->parent('home')
-            ->push(trans('general.reports'), route('reports.index'))
-            ->push(trans('general.unaccepted_asset_report'), route('reports/unaccepted_assets')));
+        // Same reasoning as reports.activity above: scoped viewers
+        // arrive via the Needs Attention widget's link and would 403
+        // if we exposed a "Reports" middle crumb linking to
+        // reports.index.
+        ->breadcrumbs(function (Trail $trail) {
+            $trail->parent('home');
+            if (Gate::allows('reports.view')) {
+                $trail->push(trans('general.reports'), route('reports.index'));
+            }
+            $trail->push(trans('general.unaccepted_asset_report'), route('reports/unaccepted_assets'));
+
+            return $trail;
+        });
 
     Route::post('unaccepted_assets/sent_reminder', [ReportsController::class, 'sentAssetAcceptanceReminder'])
         ->name('reports/unaccepted_assets_sent_reminder');
@@ -811,6 +993,7 @@ Route::group(['middleware' => 'web'], function () {
     Route::get('{object_type}/{id}/qr_code',
         [QrCodeController::class, 'show']
     )->name('qr_code/common')
+        ->middleware('auth')
         ->where(['object_type' => 'accessories|assets|hardware|licenses|locations|models|companies|components|consumables|users']);
 
     /**

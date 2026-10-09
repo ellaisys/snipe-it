@@ -7,6 +7,8 @@
     'table_header' => trans('general.asset_models'),
 ])
 
+@aware(['name'])
+
 <!-- start assets tab pane -->
 @can('view', \App\Models\AssetModel::class)
     <x-slot:table_header>
@@ -21,7 +23,6 @@
         :$presenter
         :$fixed_right_number
         :$fixed_number
-        use_sticky_css
         buttons="modelButtons"
         api_url="{{ $route }}"
         export_filename="export-models-{{ date('Y-m-d') }}"

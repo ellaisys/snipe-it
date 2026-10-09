@@ -45,8 +45,8 @@ class AssetImporter extends ItemImporter
         // $this->item exclusively via setItemFromCsvIfPresent so absent
         // columns never enter the update payload (preserving DB values)
         // and present-but-empty columns land as null (clearing DB values).
-        // See sanitizeItemForStoring override below for the matching
-        // pass-through sanitize.
+        // The base sanitize's reject-empty pass is disabled by
+        // $rejectEmptyOnUpdate on ItemImporter.
         $this->item = [];
 
         // Shared lookup fields. Present-and-empty clears the FK; absent
@@ -87,6 +87,10 @@ class AssetImporter extends ItemImporter
         // avoid the ItemImporter's shared 'notes' handling.
         $this->setItemFromCsvIfPresent($row, 'name', 'item_name');
         $this->setItemFromCsvIfPresent($row, 'notes', 'asset_notes');
+        // Assets keep order_number on the parent column. AssetObserver's
+        // created hook writes the matching Order + OrderItem so we
+        // don't call recordOrderForImportedRow here (that would
+        // duplicate).
         $this->setItemFromCsvIfPresent($row, 'order_number');
         $this->setItemFromCsvIfPresent($row, 'purchase_cost');
         $this->setItemFromCsvIfPresent($row, 'serial');
@@ -178,19 +182,6 @@ class AssetImporter extends ItemImporter
     }
 
     /**
-     * Override the base sanitize to skip the reject-empty pass. AssetImporter
-     * populates $this->item exclusively from CSV columns that were present in
-     * the row, so an empty value here is an explicit intent to clear the DB
-     * field on update. See handle() above for the matching item-population.
-     *
-     * @SuppressWarnings(PHPMD.UnusedFormalParameter)
-     */
-    protected function sanitizeItemForStoring($model, $updating = false)
-    {
-        return collect($this->item)->only($model->getFillable())->toArray();
-    }
-
-    /**
      * Create the asset if it does not exist.
      *
      * @author Daniel Melzter
@@ -263,6 +254,24 @@ class AssetImporter extends ItemImporter
             $target = $this->item['checkout_target'];
         }
 
+        // Log a warning when the operator populated a checkout column for
+        // this row but no target could be resolved. Prior behavior silently
+        // no-op'd the checkout side of the import in this case, so the
+        // row's other fields updated but no checkout event fired and
+        // nothing surfaced to the operator. Common triggers: the named
+        // location doesn't exist yet AND autocreate failed, or the older
+        // two-column shape where checkout_class was required and not
+        // mapped. See the determineCheckout comment.
+        $checkoutColumnPopulated = $this->findCsvMatch($row, 'checkout_location')
+            || $this->findCsvMatch($row, 'checkout_asset')
+            || $this->findCsvMatch($row, 'checkout_user')
+            || $this->findCsvMatch($row, 'checkout_class')
+            || $this->findCsvMatch($row, 'email')
+            || $this->findCsvMatch($row, 'username');
+        if ($checkoutColumnPopulated && empty($target)) {
+            $this->log('WARNING: A checkout column was populated for asset tag "'.$asset_tag.'" but no checkout target could be resolved from the row. The asset will be updated but no checkout event will fire.');
+        }
+
         $item = $this->sanitizeItemForStoring($asset, $editingAsset);
 
         // The location id fetched by the csv reader is actually the rtd_location_id.
@@ -323,11 +332,25 @@ class AssetImporter extends ItemImporter
                 $this->recordUpdated();
             } else {
                 $this->recordCreated();
+                // AssetObserver::created already wrote the Order +
+                // OrderItem from the asset's own columns.
             }
 
             // If we have a target to checkout to, lets do so.
             if (isset($target) && ($target !== false)) {
-                $asset = $asset->fresh();
+                // Concurrency guard, same shape as Api\AssetsController::checkout.
+                // Two admins importing overlapping CSVs (or one admin importing
+                // while another checkout runs through the UI) could race here:
+                // the fresh() read + canCheckoutTo() check is followed by a
+                // checkOut() call with no row lock. Re-fetch the row under
+                // lockForUpdate and evaluate the ownership / eligibility
+                // conditions against the locked snapshot. If a racing operator
+                // claimed the asset in the interim, skip this row rather than
+                // stacking a duplicate history entry.
+                $asset = Asset::whereKey($asset->id)->lockForUpdate()->first();
+                if (! $asset) {
+                    return;
+                }
 
                 if (! $asset->canCheckoutTo($target)) {
                     $this->log(trans('general.error_checkout_company_mismatch', [
@@ -346,6 +369,8 @@ class AssetImporter extends ItemImporter
                         }
 
                         $asset->checkOut($target, $this->created_by, $checkout_date, null, 'Checkout from CSV Importer', $asset->name);
+
+                        $this->maybeSendWelcomeEmail($target);
                     }
                 }
             }

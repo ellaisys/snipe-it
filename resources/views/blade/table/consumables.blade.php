@@ -5,7 +5,10 @@
     'fixed_right_number' => 2,
     'fixed_number' => 1,
     'table_header' => trans('general.consumables'),
+    'export_name' => null,
 ])
+
+@aware(['name'])
 
 <!-- start consumables tab pane -->
 @can('view', \App\Models\Consumable::class)
@@ -18,12 +21,11 @@
         :$presenter
         :$fixed_right_number
         :$fixed_number
-        use_sticky_css
         show_column_search="true"
         show_advanced_search="true"
         buttons="consumableButtons"
         api_url="{{ $route }}"
-        export_filename="export-{{ str_slug($name) }}-consumables-{{ date('Y-m-d') }}"
+        export_filename="export-{{ $export_name ? str_slug($export_name).'-' : '' }}consumables-{{ date('Y-m-d') }}"
     />
 
 @endcan

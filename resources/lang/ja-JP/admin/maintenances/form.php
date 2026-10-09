@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'select_type' => 'Select Maintenance Type',
+    'select_type' => '管理タイプの選択',
     'asset_maintenance_type' => 'タイプ',
     'title' => '役職',
     'start_date' => '開始日',
@@ -15,6 +15,7 @@ return [
     'responsible_party' => 'Responsible Party',
     'checked_out_to_at_creation' => 'チェックアウト先',
     'completed_at' => 'Completed At',
+    'completed_at_help' => 'When this maintenance was actually finished. Leave blank if not yet complete. Setting a date here is equivalent to clicking Mark Complete but lets you enter a past date instead of using the current time.',
     'completed_by' => 'Completed By',
     'mark_complete' => 'Mark Complete',
     'already_complete' => 'Already Completed',

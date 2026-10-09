@@ -42,6 +42,11 @@ return [
         'bulk_checkout_warning' => ':license_name has seats that are currently checked out and cannot be deleted. Please check in all seats before deleting.',
     ],
 
+    'delete_with_checkin' => [
+        'bulk_success' => ':count licenses were deleted successfully after checking in :seats seats.',
+        'partial_success' => ':count licenses were deleted successfully after checking in :seats seats. See additional information below.',
+    ],
+
     'checkout' => [
         'error' => 'ライセンスのチェックを外す際に問題が発生しました。もう一度、やり直して下さい。',
         'success' => 'ライセンスのチェックを外しました。',
@@ -55,6 +60,10 @@ return [
         'error' => 'ライセンスのチェックを入れる際に問題が発生しました。もう一度、やり直して下さい。',
         'not_reassignable' => 'Seat has been used',
         'success' => 'ライセンスのチェックを入れました。',
+    ],
+
+    'import' => [
+        'no_free_seats' => 'License ":license" has no free seats. ":target" was not assigned to a seat.',
     ],
 
 ];

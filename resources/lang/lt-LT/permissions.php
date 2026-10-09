@@ -21,7 +21,7 @@ return [
     ],
     'admin' => [
         'name' => 'Administratoriaus prieiga',
-        'note' => 'Nustato, ar naudotojas turi prieigą prie daugumos sistemos funkcijų, IŠSKYRUS sistemos administratoriaus nustatymus. Šie naudotojai galės valdyti naudotojus, vietas, kategorijas ir kt., tačiau jų prieiga YRA ribojama Pilno kelių įmonių palaikymo, kai jis įjungtas.',
+        'note' => 'Nustato, ar naudotojas turi prieigą prie daugumos sistemos funkcijų, IŠSKYRUS sistemos administratoriaus nustatymus. Šie naudotojai galės valdyti naudotojus, vietas, kategorijas ir kt., tačiau jų prieiga YRA ribojama visiško kelių įmonių palaikymo, kai jis įjungtas.',
     ],
 
     'import' => [
@@ -36,11 +36,12 @@ return [
 
     'assets' => [
         'name' => 'Turtas',
-        'note' => 'Suteikia prieigą prie programos Turto skilties.',
+        'note' => 'Suteikia prieigą prie programos Turto skilties. ',
     ],
 
     'assetsview' => [
         'name' => 'Peržiūrėti turtą',
+        'note' => 'Note that users with this permission will also be able to see (not modify or delete) files uploaded to the asset model as well. This is to make it easier to share common documents like user manuals across assets without having to upload them to every asset, and to avoid having to grant the user permission to modify asset files. Users with this permission will also be able to view edit and checkin history.',
     ],
 
     'assetscreate' => [
@@ -71,8 +72,8 @@ return [
     ],
 
     'assetsviewrequestable' => [
-        'name' => 'Peržiūrėti užsakomą turtą',
-        'note' => 'Leidžia naudotojui peržiūrėti turtą, kuris pažymėtas kaip užsakomas.',
+        'name' => 'Peržiūrėti užsakomus daiktus',
+        'note' => 'Leidžia naudotojui peržiūrėti daiktus, kurie yra pažymėti kaip užsakomi.',
     ],
 
     'assetsviewencrypted-custom-fields' => [
@@ -255,6 +256,7 @@ return [
     ],
     'usersview' => [
         'name' => 'Peržiūrėti naudotojus',
+        'note' => 'Note that users with this permission will also be able to see (not modify or delete) files uploaded to the user as well. Users with this permission will also be able to view edit and checkin history.',
     ],
     'userscreate' => [
         'name' => 'Sukurti naudotojus',

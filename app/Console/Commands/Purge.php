@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Enums\ActionType;
+use App\Enums\FileStorage;
 use App\Models\Accessory;
 use App\Models\Asset;
 use App\Models\AssetModel;
@@ -14,7 +15,6 @@ use App\Models\Consumable;
 use App\Models\Department;
 use App\Models\License;
 use App\Models\Location;
-use App\Models\Maintenance;
 use App\Models\Manufacturer;
 use App\Models\Supplier;
 use App\Models\User;
@@ -213,16 +213,54 @@ class Purge extends Command
         // soft-deletable models, but a trashed License with live
         // LicenseSeats or a trashed Asset with live Maintenances would
         // leave orphans behind if we only nuked soft-deleted rows.
+        // Two shapes: a plain FK column name (`license_seats.license_id`)
+        // or a `[column, type_column, expected_type]` triple for
+        // polymorphic child tables (`maintenances.item_id` paired with
+        // `item_type='App\Models\Asset'`). The polymorphic form is needed
+        // now that maintenances live on `item_id`/`item_type` and could
+        // point at non-Asset parents; without the type guard, purging a
+        // trashed Asset would also delete accessory-owned maintenances
+        // that happen to share the same numeric id.
         $childTables = [
-            Asset::class => ['maintenances' => 'asset_id'],
-            License::class => ['license_seats' => 'license_id'],
+            Asset::class => [
+                'maintenances' => ['item_id', 'item_type', Asset::class],
+                'checkout_requests' => ['requestable_id', 'requestable_type', Asset::class],
+                // Sync-adapter identity rows tying this asset to a
+                // vendor host. Orphaned once the asset is purged, and
+                // an orphan would cause the next sync to skip creating
+                // a fresh asset for that vendor host because
+                // provisionAsset() finds the dead link first.
+                'asset_external_sources' => 'asset_id',
+            ],
+            License::class => [
+                'license_seats' => 'license_id',
+                'checkout_requests' => ['requestable_id', 'requestable_type', License::class],
+            ],
+            // Every model carrying the Requestable trait needs its
+            // pending / historical CheckoutRequest rows nuked when
+            // the parent is purged, or those rows linger as orphans
+            // in the admin queue and the requester's own /account/
+            // requested page. Cascade uses the polymorphic
+            // requestable_id + requestable_type pair; the trait's
+            // forceDeleted hook covers the direct forceDelete() path
+            // that bypasses this command.
+            Accessory::class => ['checkout_requests' => ['requestable_id', 'requestable_type', Accessory::class]],
+            Consumable::class => ['checkout_requests' => ['requestable_id', 'requestable_type', Consumable::class]],
+            Component::class => ['checkout_requests' => ['requestable_id', 'requestable_type', Component::class]],
+            AssetModel::class => ['checkout_requests' => ['requestable_id', 'requestable_type', AssetModel::class]],
         ];
         $childCounts = [];
         if (array_key_exists($modelClass, $childTables)) {
             foreach ($childTables[$modelClass] as $childTable => $foreignKey) {
                 $count = 0;
                 foreach ($ids as $id) {
-                    $q = DB::table($childTable)->where($foreignKey, $id);
+                    $q = DB::table($childTable);
+                    if (is_array($foreignKey)) {
+                        [$idColumn, $typeColumn, $expectedType] = $foreignKey;
+                        $q->where($idColumn, $id)->where($typeColumn, $expectedType);
+                    } else {
+                        $q->where($foreignKey, $id);
+                    }
                     $count += $dryRun ? $q->count() : $q->delete();
                 }
                 if ($count > 0) {
@@ -262,29 +300,29 @@ class Purge extends Command
     private function deleteImageFiles(string $modelClass, string $table, Collection $ids): void
     {
         // Image/avatar files stored on the public disk, keyed by parent
-        // model. Value is `column_name => public-disk subpath`. Purge
+        // model. Value is `column_name => FileStorage case`. Purge
         // reads the filename off each trashed parent row and unlinks
-        // `{subpath}/{column_value}` from the public disk.
+        // `{case->publicPath()}{column_value}` from the public disk.
         $imageFiles = [
-            User::class => ['avatar' => 'avatars'],
-            Asset::class => ['image' => 'assets'],
-            AssetModel::class => ['image' => 'models'],
-            Accessory::class => ['image' => 'accessories'],
-            Category::class => ['image' => 'categories'],
-            Company::class => ['image' => 'companies'],
-            Component::class => ['image' => 'components'],
-            Consumable::class => ['image' => 'consumables'],
-            Department::class => ['image' => 'departments'],
-            Location::class => ['image' => 'locations'],
-            Manufacturer::class => ['image' => 'manufacturers'],
-            Supplier::class => ['image' => 'suppliers'],
+            User::class => ['avatar' => FileStorage::Avatars],
+            Asset::class => ['image' => FileStorage::Assets],
+            AssetModel::class => ['image' => FileStorage::Models],
+            Accessory::class => ['image' => FileStorage::Accessories],
+            Category::class => ['image' => FileStorage::Categories],
+            Company::class => ['image' => FileStorage::Companies],
+            Component::class => ['image' => FileStorage::Components],
+            Consumable::class => ['image' => FileStorage::Consumables],
+            Department::class => ['image' => FileStorage::Departments],
+            Location::class => ['image' => FileStorage::Locations],
+            Manufacturer::class => ['image' => FileStorage::Manufacturers],
+            Supplier::class => ['image' => FileStorage::Suppliers],
         ];
 
         if (! array_key_exists($modelClass, $imageFiles)) {
             return;
         }
 
-        foreach ($imageFiles[$modelClass] as $column => $subpath) {
+        foreach ($imageFiles[$modelClass] as $column => $case) {
             $filenames = DB::table($table)
                 ->whereIn('id', $ids)
                 ->pluck($column)
@@ -293,7 +331,7 @@ class Purge extends Command
 
             foreach ($filenames as $filename) {
                 try {
-                    $key = trim($subpath, '/').'/'.basename($filename);
+                    $key = $case->publicPath().basename($filename);
                     if (Storage::disk('public')->exists($key)) {
                         Storage::disk('public')->delete($key);
                     }
@@ -333,21 +371,17 @@ class Purge extends Command
         // the parent model of the file. These are the contracts, receipts,
         // photos, etc. tracked in action_logs with action_type = 'uploaded'.
         // Not done at soft-delete time so restoring a soft-deleted row
-        // brings the files back with it.
-        $uploadRoots = [
-            Accessory::class => 'private_uploads/accessories',
-            Asset::class => 'private_uploads/assets',
-            AssetModel::class => 'private_uploads/models',
-            Company::class => 'private_uploads/companies',
-            Component::class => 'private_uploads/components',
-            Consumable::class => 'private_uploads/consumables',
-            Department::class => 'private_uploads/departments',
-            License::class => 'private_uploads/licenses',
-            Location::class => 'private_uploads/locations',
-            Maintenance::class => 'private_uploads/maintenances',
-            Supplier::class => 'private_uploads/suppliers',
-            User::class => 'private_uploads/users',
-        ];
+        // brings the files back with it. Built by iterating FileStorage
+        // so adding a new case there wires it up here automatically.
+        // Only private-scope cases that resolve to a single Eloquent
+        // model show up (Audits / Signatures / EulaPdfs / Imports /
+        // Backups return null from modelClass() and are skipped).
+        $uploadRoots = [];
+        foreach (FileStorage::cases() as $case) {
+            if ($case->hasPrivateScope() && ($model = $case->modelClass()) !== null) {
+                $uploadRoots[$model] = $case->privateStorageKey();
+            }
+        }
 
         $logs = DB::table('action_logs')
             ->select('action_type', 'item_type', 'filename', 'accept_signature')
@@ -368,15 +402,15 @@ class Purge extends Command
             // query-builder rows (no Eloquent).
             if (! empty($log->filename)) {
                 if ($log->action_type === ActionType::Accepted->value || $log->action_type === ActionType::Declined->value) {
-                    $paths[] = 'private_uploads/eula-pdfs/'.$log->filename;
+                    $paths[] = FileStorage::EulaPdfs->privateStorageKey().$log->filename;
                 } elseif ($log->action_type === ActionType::Audit->value) {
-                    $paths[] = 'private_uploads/audits/'.$log->filename;
+                    $paths[] = FileStorage::Audits->privateStorageKey().$log->filename;
                 } elseif ($log->item_type && isset($uploadRoots[$log->item_type])) {
-                    $paths[] = rtrim($uploadRoots[$log->item_type], '/').'/'.$log->filename;
+                    $paths[] = $uploadRoots[$log->item_type].$log->filename;
                 }
             }
             if (! empty($log->accept_signature)) {
-                $paths[] = 'private_uploads/signatures/'.$log->accept_signature;
+                $paths[] = FileStorage::Signatures->privateStorageKey().$log->accept_signature;
             }
         }
 
@@ -395,8 +429,8 @@ class Purge extends Command
     {
         $privateFileColumns = [
             CheckoutAcceptance::class => [
-                'signature_filename' => 'private_uploads/signatures',
-                'stored_eula_file' => 'private_uploads/eula-pdfs',
+                'signature_filename' => FileStorage::Signatures->privateStorageKey(),
+                'stored_eula_file' => FileStorage::EulaPdfs->privateStorageKey(),
             ],
         ];
 

@@ -27,7 +27,7 @@ class CategoryImporter extends ItemImporter
         // columns stay out of $this->item so update mode preserves the DB
         // value, and present-but-empty cells land as null so update mode
         // clears the DB value. The base sanitize's reject-empty pass is
-        // suppressed via the sanitizeItemForStoring override below.
+        // disabled by $rejectEmptyOnUpdate on ItemImporter.
         $this->item = [];
 
         $this->setItemFromCsvIfPresent($row, 'name');
@@ -45,7 +45,7 @@ class CategoryImporter extends ItemImporter
 
         // Boolean flags. Present-empty maps to 0; present-with-value uses
         // fetchHumanBoolean; absent leaves the DB value alone on update.
-        foreach (['use_default_eula', 'require_acceptance', 'checkin_email'] as $flag) {
+        foreach (['use_default_eula', 'require_acceptance', 'checkin_email', 'alert_on_response'] as $flag) {
             if ($this->csvRowHas($row, $flag)) {
                 $raw = $this->findCsvMatch($row, $flag);
                 $this->item[$flag] = ($this->fetchHumanBoolean($raw) == 1) ? 1 : 0;
@@ -53,17 +53,6 @@ class CategoryImporter extends ItemImporter
         }
 
         $this->createCategoryIfNotExists($row);
-    }
-
-    /**
-     * Override the base sanitize to skip the reject-empty pass. See handle()
-     * above for the matching item-population.
-     *
-     * @SuppressWarnings(PHPMD.UnusedFormalParameter)
-     */
-    protected function sanitizeItemForStoring($model, $updating = false)
-    {
-        return collect($this->item)->only($model->getFillable())->toArray();
     }
 
     /**

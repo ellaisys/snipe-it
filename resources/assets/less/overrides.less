@@ -361,10 +361,6 @@ body {
   white-space: normal;
 }
 
-.modal-warning .modal-help {
-  color: #fff8af;
-}
-
 .bootstrap-table .fixed-table-container .fixed-table-body .fixed-table-loading {
   z-index: 0 !important;
 }
@@ -373,6 +369,39 @@ body {
 // bleed past the container's bottom edge into the pagination area.
 .bootstrap-table .fixed-table-container {
   overflow: hidden;
+}
+
+// Bs-table ships several 1px #dee2e6 hairlines on the fixed-height
+// container (border-bottom on the plain no-footer variant, top+bottom
+// on has-card-view, left+right on .fixed-table-border). #dee2e6 is a
+// pale gray that blends into white on light mode but reads as a stark
+// bright edge on dark mode against --box-bg. Rather than kill the
+// borders (they're the visual seam between the table body and the
+// box wrapper) we re-color them to the same theme-aware token the
+// box's own edges use so the seam reads consistently on both themes.
+// !important is needed because bs-table's shipped stylesheet is
+// pushed via @stack('css') and can load AFTER overrides.less depending
+// on Mix bundling order; same selector + same specificity means load
+// order determines the winner without it.
+.bootstrap-table .fixed-table-container.fixed-height,
+.bootstrap-table .fixed-table-container.fixed-height:not(.has-footer),
+.bootstrap-table .fixed-table-container.fixed-height.has-card-view {
+  border-color: var(--box-bg) !important;
+}
+
+.bootstrap-table .fixed-table-container.fixed-height .fixed-table-border {
+  border-color: var(--box-bg) !important;
+}
+
+// Bs-table's loading overlay is `position: absolute; bottom: 0;
+// width: 100%; background: #fff`. Hidden via opacity:0 / visibility:
+// hidden by default, but the hardcoded white bg reads through on dark
+// mode as a stark bright strip along the container's bottom edge in
+// some browsers' compositing paths (especially when a transition is
+// in-flight or the element sits behind a translucent layer). Rebind
+// the bg to the box color so any bleed-through matches the surround.
+.bootstrap-table .fixed-table-container .fixed-table-body .fixed-table-loading {
+  background: var(--box-bg) !important;
 }
 
 @media print {
@@ -697,9 +726,11 @@ h4 {
     padding-bottom: 15px;
   }
 
-  .firstnav {
-    padding-top: 120px !important;
-  }
+  // .firstnav { padding-top: 120px !important } used to live here as
+  // another static compensation for the wrapped-header-covers-first-item
+  // bug at narrow widths. Superseded by the dynamic
+  // .main-sidebar padding-top: var(--main-header-height) rule; leaving
+  // it would double-count on top of the runtime-measured header height.
 
   .product {
     width: 400px;
@@ -908,7 +939,7 @@ thead th.css-history > .th-inner::before {
 }
 
 .form-group.has-error label, .form-group.has-error .help-block {
-  color: #a94442;
+  color: var(--text-danger);
 }
 
 .select2-container--default .select2-selection--multiple {
@@ -919,14 +950,8 @@ thead th.css-history > .th-inner::before {
   .tab-content .tab-pane .alert-block {
     margin-top: 120px
   }
-  .sidebar-menu{
-    margin-top:160px;
-  }
 }
 @media screen and (max-width: 912px) and (min-width: 512px){
-  .sidebar-menu {
-    margin-top:100px
-  }
   .navbar-custom-menu > .navbar-nav > li.dropdown.user.user-menu {
     float:right;
   }
@@ -935,11 +960,17 @@ thead th.css-history > .th-inner::before {
   }
 }
 
-@media screen and (max-width: 1268px) and (min-width: 912px){
-  .sidebar-menu {
-    margin-top:50px
-  }
-}
+// Legacy .sidebar-menu { margin-top: Npx } rules at 912-1268px,
+// 512-912px, and <=511px used to live here as hardcoded compensation
+// for the "header wraps at intermediate widths and covers the first
+// sidebar item" bug (#5085, #11868, #19482). Same story for the
+// .firstnav { padding-top: 120px !important } that used to be inside
+// the max-width: 520px block below. All three were double-counted on
+// top of the dynamic .main-sidebar padding-top: var(--main-header-height)
+// rule further down that measures the actual header height at runtime,
+// producing 200px+ visual gaps above Dashboard at those breakpoints.
+// The dynamic measurement covers all these cases correctly, so the
+// static compensation is deleted.
 @media screen and (max-width: 992px){
   .info-stack-container {
     flex-direction: column;
@@ -2109,10 +2140,13 @@ p,
 .btn-primary:hover,
 .btn-primary:focus,
 .modal-danger,
+.modal-warning,
 .modal-danger h2,
 .modal-warning h2,
 .modal-danger h4,
 .modal-warning h4,
+.modal-warning .help-block,
+.modal-warning .modal-help,
 .box-solid.box-danger > .box-header,
 .box-solid.box-danger > .box-header .box-title,
 .bg-maroon,
@@ -2290,6 +2324,56 @@ its trigger in both modes.
   border-color: var(--box-header-top-border-color);
 }
 
+// Bootstrap 3's .table-hover hardcodes #f5f5f5 in _tables.scss which
+// reads as near-white on the dark theme and hides row text against
+// the hover background. Route it through the same theme-aware custom
+// property Snipe-IT uses for its striped-table alt row color so hover
+// flips correctly in both modes for every table across the app.
+.table-hover > tbody > tr:hover > td,
+.table-hover > tbody > tr:hover > th {
+  background-color: var(--table-stripe-bg-alt) !important;
+}
+
+// Adapter catalog on the sync-adapters help pane. Semantic list (not
+// a table) with a per-item action row rendered via flexbox. Uses the
+// same theme-aware custom properties as the striped-table styles so
+// dividers and hover work correctly in both light and dark themes.
+.adapter-catalog {
+  margin: 0;
+
+  .adapter-catalog-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--table-border-row-color);
+  }
+
+  .adapter-catalog-item:last-child {
+    border-bottom: 0;
+  }
+
+  .adapter-catalog-item:hover {
+    background-color: var(--table-stripe-bg-alt);
+  }
+
+  .adapter-catalog-docs {
+    // Fixed column on the left so the adapter names line up regardless
+    // of which rows have a docs link and which fall back to an sr-only
+    // placeholder.
+    width: 28px;
+    text-align: center;
+    margin-right: 8px;
+  }
+
+  .adapter-catalog-name {
+    flex: 1;
+  }
+
+  .adapter-catalog-add {
+    margin-left: 8px;
+  }
+}
+
 .nav-tabs-custom > .nav-tabs > li.active {
   border-top-color: var(--main-theme-color) !important;
   background-color: var(--box-header-top-border-color) !important;
@@ -2345,14 +2429,17 @@ table rows
 
 
 // -----------------------------------------------------------------------------
-// CSS-sticky replacement for bootstrap-table's fixed-columns extension.
+// CSS sticky columns. Bootstrap-table's fixed-columns feature was pulled
+// from the bundle in favor of this — the old feature cloned the table
+// body into an absolutely-positioned overlay, which drifted in height
+// with long-content rows (#19197, #19458) and misplaced tooltips when
+// the container reflowed without a window resize (asset show + info
+// panel toggle). CSS position:sticky on the actual <td> cells can't
+// drift because the cells ARE the pinned cells.
 //
-// Tables that pass use_sticky_css to <x-table> get one of these classes
-// (snipe-table--sticky-right-N / snipe-table--sticky-left-N) instead of the
-// extension's data-fixed-columns=true. The extension clones the table body
-// into an absolutely-positioned overlay, which drifts in height with
-// long-content rows (#19197) and misplaces tooltips when the container
-// reflows without a window resize (asset show + info panel toggle).
+// Tables that want pinned columns get the snipe-table--sticky-right-N
+// or snipe-table--sticky-left-N class (via <x-table>'s fixed_number /
+// fixed_right_number props, or applied directly on a raw table).
 //
 // Body cells match the zebra background so the sticky column keeps the
 // alternating pattern. Header cells use --box-bg so scrolling body rows
@@ -2553,18 +2640,125 @@ table rows
 // -----------------------------------------------------------------------------
 
 .snipe-top-scrollbar {
-    overflow-x: auto;
+    // scroll (not auto) so the scrollbar thumb stays visible whenever
+    // the container is displayed. auto lets macOS's trackpad-scrollbar
+    // auto-hide take over on trackpad users even with the WebKit
+    // pseudo-element styling below, which read as "top scrollbar fades
+    // faster than the bottom one" (#19484 follow-up). Whole container
+    // gets display: none from updateTopScrollbar() when the underlying
+    // table doesn't actually overflow, so persistent scroll doesn't
+    // produce a floating stub on tables that fit in the viewport.
+    overflow-x: scroll;
     overflow-y: hidden;
-    // Slightly taller than the OS scrollbar so the thumb is always
-    // reachable even on platforms that render fatter scrollbars.
-    height: 15px;
-    margin-bottom: 4px;
+    // 14px scrollbar sized to match the WebKit thumb below so it
+    // reads as a deliberate chrome element rather than an OS-native
+    // accident. Bumped from 10px so the thumb is easier to grab and
+    // drag on trackpads / small screens.
+    //
+    // Outer height is 18px (border-box) = 14px scrollbar content +
+    // 4px padding-bottom acting as a visual spacer between the
+    // scrollbar thumb and the thead below it. Total 18px matches
+    // the stickyHeaderOffsetY: 18 in bootstrap-table.blade.php so
+    // the pinned scrollbar band + the sticky-clone thead just below
+    // it stack seamlessly with no bleed-through gap between them
+    // (#19484 follow-up: 4px gap of tbody rows visible between the
+    // scrollbar and the sticky thead).
+    box-sizing: border-box;
+    height: 18px;
+    padding-bottom: 4px;
+    background-color: var(--box-bg);
+    // Firefox scrollbar styling — spec-standard. `auto` uses the
+    // OS-default thickness (matches the bumped-up 14px WebKit height
+    // below so the thumb is easy to grab on trackpads / small screens).
+    scrollbar-width: auto;
+    scrollbar-color: rgba(0, 0, 0, 0.35) rgba(0, 0, 0, 0.06);
+
+    // Stay visible while the user scrolls the page down past the
+    // natural table header. Bootstrap-table's own stickyHeader
+    // (position: fixed via the .fix-sticky class) floats the thead
+    // clone at viewport top; we mirror that positioning via JS
+    // (updateTopScrollbarSticky in bootstrap-table.blade.php) so
+    // the scrollbar sits ABOVE the sticky-clone thead - matching
+    // the natural (unscrolled) order where the scrollbar reads
+    // immediately above the thead. Bootstrap-table config pushes
+    // .fix-sticky down by (this mirror's height + padding-bottom)
+    // via stickyHeaderOffsetY so the two don't overlap. Sticky
+    // positioning would have been simpler than the JS toggle but
+    // didn't engage reliably against page scroll from inside the
+    // .bootstrap-table nesting depth; falling back to position:
+    // fixed set by the scroll listener. Reported in #19484 as
+    // "none of scrollbars are visible when list is scrolled to
+    // the point where header starts floating" plus follow-up
+    // "top scrollbar used to be above the table headers, which
+    // seems a little better".
+    z-index: 101;
+
+    // When the scroll listener detects the natural position has
+    // gone above viewport top, this class flips the element to
+    // position: fixed via inline style. The class itself just
+    // marks "currently pinned" so callers can style pinned vs
+    // unpinned states differently if needed.
+    &.is-pinned {
+        // Inline top/left/width comes from JS. Keeping the box
+        // shadow drop off here so pinned state visually separates
+        // the mirror from the sticky-clone thead below it.
+        box-shadow: 0 1px 0 rgba(0, 0, 0, 0.06);
+    }
+
+    // WebKit / Blink scrollbar pseudo-elements. Both the track and the
+    // thumb get border-radius so the container reads as rounded even
+    // when the thumb is at the edge of the track (the previous
+    // container-level border-radius was invisible because the container
+    // had no visible background to round). Track carries a subtle tint
+    // so the rounded shape is actually visible rather than shape-of-nothing.
+    &::-webkit-scrollbar {
+        height: 14px;
+    }
+    &::-webkit-scrollbar-track {
+        background-color: rgba(0, 0, 0, 0.06);
+        border-radius: 7px;
+    }
+    &::-webkit-scrollbar-thumb {
+        background-color: rgba(0, 0, 0, 0.35);
+        border-radius: 7px;
+    }
+    &::-webkit-scrollbar-thumb:hover {
+        background-color: rgba(0, 0, 0, 0.5);
+    }
 }
 
 .snipe-top-scrollbar-inner {
     // Height just enough to make the parent scrollable; width is set by
     // JS to match the underlying table's scrollWidth.
     height: 1px;
+}
+
+// Match the native bottom scrollbar on the table body to the styled
+// top mirror above so the two horizontal scroll handles read as a
+// consistent pair. Without this, the top uses our thin-with-rounded-
+// thumb chrome while the bottom uses the OS default and the two look
+// mismatched when both are visible on wide tables. scrollbar-width
+// bumped from `thin` to `auto` and the WebKit height matched to the
+// top mirror's 14px so the two scrollbars are the same easy-to-grab
+// size on trackpads / small screens (#19484 follow-up).
+.bootstrap-table .fixed-table-body {
+    scrollbar-width: auto;
+    scrollbar-color: rgba(0, 0, 0, 0.35) rgba(0, 0, 0, 0.06);
+
+    &::-webkit-scrollbar {
+        height: 14px;
+    }
+    &::-webkit-scrollbar-track {
+        background-color: rgba(0, 0, 0, 0.06);
+        border-radius: 7px;
+    }
+    &::-webkit-scrollbar-thumb {
+        background-color: rgba(0, 0, 0, 0.35);
+        border-radius: 7px;
+    }
+    &::-webkit-scrollbar-thumb:hover {
+        background-color: rgba(0, 0, 0, 0.5);
+    }
 }
 
 
@@ -2705,6 +2899,55 @@ Active and hover for top tier sidenav items
 
 .main-sidebar {
   background-color: #1e282c;
+}
+
+// Shift .main-header's BOX (not just its inner .navbar) so the header
+// occupies only the horizontal space past the sidebar's column. Base
+// AdminLTE 2 leaves .main-header full-width and only offsets the
+// .navbar's contents via margin-left: 230px, which fixes visual
+// alignment but not click alignment: the header's own <div> (z-index
+// 1030) still extends across the sidebar column above the sidebar
+// (z-index 810), so at intermediate widths where the navbar wraps to
+// two or three rows the header's empty second/third-row area sits on
+// top of the first sidebar item and eats clicks. Reported repeatedly
+// on the tracker (#19482, #11868, #5085) and previously papered over
+// with hardcoded .sidebar-menu { margin-top: Npx } offsets at
+// specific breakpoints - since removed above in favor of this
+// structural fix.
+//
+// Shift values track the sidebar's rendered width per body class:
+//  - default (.sidebar-mini, sidebar open): 230px
+//  - .sidebar-mini.sidebar-collapse (menu closed, mini icons): 50px
+//  - mobile (<=767px): 0 (sidebar is translated off-screen)
+//
+// The navbar's own margin-left is zeroed at each state so the navbar
+// content doesn't get double-shifted after the header itself moves.
+// Transition on .main-header matches the navbar's existing 0.3s
+// margin-left transition so the header and its content animate
+// together when the sidebar toggles.
+@media (min-width: 768px) {
+  .main-header {
+    margin-left: 230px;
+    transition: margin-left 0.3s ease-in-out;
+  }
+  .main-header .navbar {
+    margin-left: 0;
+  }
+  .sidebar-mini.sidebar-collapse .main-header {
+    margin-left: 50px;
+  }
+  // AdminLTE has a higher-specificity rule at min-width: 768px:
+  //   .sidebar-mini.sidebar-collapse .main-header .navbar { margin-left: 50px }
+  // that overrides our plain .main-header .navbar reset above. Without
+  // matching its specificity here, the mini-collapsed state ends up
+  // double-shifting the navbar (header shifted 50px + navbar shifted
+  // 50px = navbar starts at x=100). That pushed the .sidebar-toggle
+  // hamburger past the sidebar column and into the header instead of
+  // sitting over the mini-icon column at the top-left (where its
+  // -48px margin-left is designed to place it).
+  .sidebar-mini.sidebar-collapse .main-header .navbar {
+    margin-left: 0;
+  }
 }
 
 
@@ -3252,3 +3495,507 @@ dl.table-display {
     border: 0;
   }
 }
+
+// Issue #19443: on narrower viewports (sidebar open, small laptops)
+// the bs-table search input ends up wedged between the box's
+// bulk-actions area (pulled left, ~500px min-width) and the button
+// toolbar (pulled right), which strands it visually in the middle.
+// Force the search onto its own row below the toolbar, right-aligned,
+// when the viewport isn't wide enough to fit all three inline. Wide
+// layouts stay unchanged.
+//
+// The outer `.search` is bootstrap's `.input-group` (display: table)
+// wrapping a nested `.input-group` with the input + clear button.
+// Just adding `clear: both` to the still-floated element left it
+// stranded mid-container. Turning the outer into a plain block with
+// `text-align: right`, and forcing the nested input-group to
+// `inline-flex` so it respects the parent's text alignment, lets it
+// sit flush against the box's right edge on its own row.
+@media (max-width: 1400px) {
+  .box-body .fixed-table-toolbar > .search.pull-right {
+    clear: both !important;
+    margin-top: 8px;
+  }
+}
+
+// Info-panel action button row. Every asset / user / license detail
+// page renders a horizontal strip of icon buttons (edit, clone, note,
+// audit, delete, ...) above the info panel. Was a plain .row with no
+// wrap strategy, so on narrow viewports the last one or two buttons
+// would drop to their own line with no spacing from the row above.
+// Flex + wrap + gap gives a predictable break point and consistent
+// spacing between buttons in either axis. Also fixed #19443.
+//
+// Destructive buttons (delete, and by convention checkin) still need
+// to sit visually apart from the non-destructive ones on the right
+// edge, which they got via `pull-right` (float: right) before this
+// container went flex. Floats are ignored by flex, so the first
+// pull-right child gets margin-left: auto to consume the remaining
+// space and shove itself right. Anything after it clusters next to
+// it.
+//
+// pull-right children also get order:1 so they visually move to the
+// end of the row regardless of their DOM position. Without this,
+// pull-right buttons that appear BEFORE non-pull-right buttons in
+// markup (checkin is emitted before edit/clone/audit on the asset
+// view, and only when the asset is currently checked out - which is
+// why the misalignment only showed up on checked-out assets) end up
+// dragging every subsequent sibling right along with them via the
+// auto margin, leaving only the first non-pull-right button alone on
+// the left. order:1 corrects the visual grouping so pull-right ends
+// up on the right and the non-pull-right stack stays left, matching
+// the behavior the old floats used to give.
+.info-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  // Bleed out through the parent .box-header's 10px horizontal
+  // padding so the button row hits the box's actual edges. Matches
+  // how a bootstrap .row offsets its container's gutters.
+  margin: 0 -10px;
+
+  > .pull-right {
+    order: 1;
+    margin-left: auto;
+  }
+
+  > .pull-right ~ .pull-right {
+    margin-left: 0;
+  }
+}
+
+// ============================================================================
+// FullCalendar v6 dark-mode overrides.
+//
+// FullCalendar's stock CSS reads from a fixed palette of light neutrals for
+// header cells, gridlines, and hour-axis text. In light mode that reads fine
+// against the AdminLTE box background; in dark mode the light-neutral rules
+// produce a wash of near-white cells and pale grid strokes that lack
+// contrast against the dark box. Rebind them to the same tokens the rest of
+// the app already uses.
+// ============================================================================
+
+[data-theme="dark"] {
+  .fc {
+    --fc-border-color: var(--box-header-top-border-color);
+    --fc-page-bg-color: var(--box-bg);
+    --fc-neutral-bg-color: ~"hsl(from var(--box-bg) h s calc(l + 5))";
+    --fc-neutral-text-color: var(--color-fg);
+    --fc-list-event-hover-bg-color: ~"hsl(from var(--box-bg) h s calc(l + 8))";
+    --fc-today-bg-color: ~"hsl(from var(--main-theme-color) h s calc(l - 25) / 0.25)";
+
+    .fc-col-header-cell,
+    .fc-list-day-cushion {
+      background-color: ~"hsl(from var(--box-bg) h s calc(l + 5))";
+      color: var(--color-fg);
+    }
+
+    .fc-col-header-cell-cushion,
+    .fc-daygrid-day-number,
+    .fc-timegrid-axis-cushion,
+    .fc-timegrid-slot-label-cushion,
+    .fc-list-day-text,
+    .fc-list-day-side-text,
+    .fc-list-event-title,
+    .fc-list-event-time {
+      color: var(--color-fg);
+    }
+
+    .fc-scrollgrid,
+    .fc-scrollgrid td,
+    .fc-scrollgrid th,
+    .fc-timegrid-slot,
+    .fc-daygrid-day {
+      border-color: var(--box-header-top-border-color);
+    }
+  }
+}
+
+// ============================================================================
+// Dashboard equal-height rows.
+//
+// AdminLTE 2 / Bootstrap 3 don't stretch sibling .box heights within a row,
+// so a col-md-8 + col-md-4 pair looks lopsided any time the wider box has
+// more content than the narrower one. This wrapper turns the row into a
+// flex container and forces every child .box to fill its column's height.
+// Applied only on rows opted-in via `dashboard-row-eq` so the rule doesn't
+// leak into other admin pages that happen to use .row + .box.
+// ============================================================================
+
+// Row-wrapper margin lives outside the media query so successive rows stay
+// gutter-separated at every breakpoint, mobile included.
+.dashboard-row-eq {
+  margin-bottom: 20px;
+}
+
+// Equal-height flex layout ONLY on md and up. Below md, Bootstrap 3 collapses
+// .col-md-* to full-width stacked blocks; forcing flex there causes every
+// widget in the row to stretch to the tallest sibling in the flow, which
+// leaves the small widgets with huge whitespace gaps on a phone. Falling
+// back to BS3's stock block layout below md keeps mobile clean.
+@media (min-width: 992px) {
+  .dashboard-row-eq {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    // Vertical gap between wrapped flex lines. When the row holds
+    // more than 12 cols worth of widgets and BS3 wraps them onto
+    // successive lines, `row-gap` inserts a consistent gutter
+    // between those lines. Without it, each wrap-line abuts the
+    // one above with no visual separation. Horizontal gaps between
+    // sibling cols are still handled by Bootstrap's built-in
+    // 15px column padding, so no `column-gap` is set here.
+    row-gap: 20px;
+  }
+
+  .dashboard-row-eq > [class*="col-"] {
+    display: flex;
+    flex-direction: column;
+    float: none; // BS3 gives cols float:left, which suppresses flex behavior
+  }
+
+  // Let cols grow proportionally to fill any leftover space on a
+  // partial wrap-line. Full lines (cols summing to col-md-12) have
+  // no remaining space so nothing grows. Partial lines (e.g.
+  // col-md-4 + col-md-6 when the third widget is gated off for
+  // this viewer) expand both cols so the visual line reads as a
+  // complete row instead of a truncated one with dead space on
+  // the right. Grow factor mirrors the col number so a col-md-8
+  // still visually outweighs a col-md-4 on the same wrapped line.
+  .dashboard-row-eq > .col-md-4 { flex-grow: 4; }
+  .dashboard-row-eq > .col-md-6 { flex-grow: 6; }
+  .dashboard-row-eq > .col-md-8 { flex-grow: 8; }
+
+  .dashboard-row-eq > [class*="col-"] > .box {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 100%;
+  }
+
+  // Ensure the box-body absorbs slack inside a stretched box, so header stays
+  // pinned to the top and any footer/link stays at the bottom instead of the
+  // body content leaving whitespace beneath itself.
+  .dashboard-row-eq > [class*="col-"] > .box > .box-body {
+    flex: 1 1 auto;
+  }
+
+  // AdminLTE flips a .collapsed-box class on the .box when the header
+  // +/- toggle collapses the body. Without this override, the box would
+  // stay stretched to the col's full height and the collapse would have
+  // no visible effect. Let the collapsed box shrink to its own content
+  // (just the header) so the toggle behaves like it does on non-flex
+  // dashboards. Neighboring boxes stay stretched to their previous
+  // heights.
+  .dashboard-row-eq > [class*="col-"] > .box.collapsed-box {
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+}
+
+// ============================================================================
+// FullCalendar built-in toolbar buttons (today / prev / next / month /
+// week / day / list) use the shipped `.fc-button-primary` gray palette
+// out of the box, which looks unrelated to the rest of the app. Rebind
+// them to Snipe-IT's --main-theme-color palette so the whole calendar
+// header reads as part of the same UI. `.fc-button-active` for the
+// currently-selected view gets a darker fill so it stays distinct.
+// ============================================================================
+
+.fc {
+  .fc-button-primary {
+    background-color: var(--main-theme-color) !important;
+    background-image: none !important;
+    border-color: ~"hsl(from var(--main-theme-color) h s calc(l - 15))" !important;
+    color: var(--nav-primary-text-color) !important;
+  }
+
+  .fc-button-primary:hover,
+  .fc-button-primary:focus {
+    background-color: ~"hsl(from var(--main-theme-color) h s calc(l - 8))" !important;
+    border-color: ~"hsl(from var(--main-theme-color) h s calc(l - 20))" !important;
+    color: var(--nav-primary-text-color) !important;
+  }
+
+  .fc-button-primary:not(:disabled).fc-button-active,
+  .fc-button-primary:not(:disabled):active {
+    background-color: ~"hsl(from var(--main-theme-color) h s calc(l - 18))" !important;
+    border-color: ~"hsl(from var(--main-theme-color) h s calc(l - 25))" !important;
+    color: var(--nav-primary-text-color) !important;
+    box-shadow: inset 0 0 0 2px ~"hsl(from var(--main-theme-color) h s calc(l - 30))" !important;
+  }
+
+  .fc-button-primary:disabled {
+    background-color: ~"hsl(from var(--main-theme-color) h s calc(l + 10) / 0.5)" !important;
+    border-color: ~"hsl(from var(--main-theme-color) h s calc(l - 5) / 0.5)" !important;
+    color: var(--nav-primary-text-color) !important;
+    opacity: 0.6;
+  }
+}
+
+// ============================================================================
+// Dashboard row-height cap (large screens only).
+//
+// Rows opted in via `dashboard-row-compact` get a max-height on each
+// box's body so a long list (Needs Attention) or a long low-stock
+// scroll doesn't drag the whole row taller than the rest of the
+// dashboard reads comfortably. Gated on min-width: 1200px because on
+// smaller screens the boxes stack (single column) and clipping
+// content there would hide useful rows behind a scrollbar the user
+// didn't ask for.
+// ============================================================================
+
+@media (min-width: 1200px) {
+  .dashboard-row-compact > [class*="col-"] > .box > .box-body {
+    max-height: 400px;
+    overflow-y: auto;
+    // Suppress bs-table's horizontal scrollbar on widget tables.
+    // The bootstrap-table plugin wraps every table in a
+    // .fixed-table-container that defaults to overflow-x: auto, so
+    // when column widths sum to even 1px over the container the
+    // widget grows a spurious horizontal scrollbar. Cells wrap or
+    // clip cleanly at this width, so hiding the overflow is
+    // preferable to letting the scrollbar eat vertical space.
+    overflow-x: hidden;
+  }
+
+  // .dashboard-chart-body opts a box-body out of the compact scroll
+  // cap. Charts (Chart.js pie in particular) render a single canvas
+  // per box; capping + scrolling makes the pie clip inside a
+  // scrollable viewport instead of filling the box like a chart
+  // should. Keep the flex-stretch to match sibling row heights, but
+  // let the chart's own responsive resize fill the vertical space
+  // instead of forcing a scrollbar.
+  .dashboard-row-compact > [class*="col-"] > .box > .box-body.dashboard-chart-body {
+    max-height: none;
+    overflow: visible;
+  }
+
+  // bs-table generates a .fixed-table-container inside each widget
+  // that also carries overflow-x: auto by default. Belt-and-braces
+  // with the parent box-body rule above so a compact widget never
+  // grows a horizontal scrollbar regardless of which layer bs-table
+  // decides to overflow at.
+  .dashboard-row-compact .fixed-table-container,
+  .dashboard-row-compact .fixed-table-body {
+    overflow-x: hidden;
+  }
+}
+
+// ============================================================================
+// Needs-attention widget: two-column row layout so badge counts of
+// wildly different widths ("1" vs "1,247") share a right-aligned column
+// and the labels below each other line up on a shared left spine. The
+// stock Bootstrap 3 .badge inside .list-group-item floats right, which
+// looks fine per-row in isolation but produces jagged label indents
+// once the counts span more than one digit.
+// ============================================================================
+
+.dashboard-attention-list > .list-group-item > a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard-attention-list .dashboard-attention-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dashboard-attention-list .dashboard-attention-count {
+  flex: 0 0 auto;
+  min-width: 3.5em;
+  text-align: center;
+  // Overrides Bootstrap 3's .list-group-item .badge float-right so
+  // the flex layout above actually controls positioning; otherwise
+  // the badge escapes the flex row and stacks weirdly.
+  float: none;
+  margin-left: 0;
+}
+
+// ============================================================================
+// bs-table's stock "no matching records found" cell reads as a dim
+// afterthought at default font size / weight. On dashboard widgets
+// where empty is often a happy state ("nothing below threshold"),
+// the unstyled row makes the panel look broken. Give empty-state
+// text a centered, padded, muted-but-legible presence via a wrapper
+// span that formatNoMatches emits when a data-empty-message is set.
+// ============================================================================
+
+.snipe-table-empty-state {
+  display: block;
+  padding: 24px 12px;
+  color: var(--text-legend-help, #888);
+  font-style: italic;
+  text-align: center;
+}
+
+// ============================================================================
+// FullCalendar list-view day-group headers render as <a> elements
+// regardless of the navLinks setting (v6 emits anchors and only
+// wires the click handler when navLinks is on). Browser default
+// styling paints them with underline + link color, so they look
+// clickable when they aren't. Neutralize the anchor look so the day
+// headers read as headings, not links.
+// ============================================================================
+
+.fc .fc-list-day-cushion a,
+.fc .fc-list-day-text,
+.fc .fc-list-day-side-text {
+  color: inherit;
+  text-decoration: none;
+  cursor: default;
+  pointer-events: none;
+}
+
+// ============================================================================
+// FullCalendar filter buttons render as a native DOM row above the
+// calendar element (see buildFilterButtons in snipeit-calendar.js).
+// Kept out of FullCalendar's headerToolbar so the calendar's own
+// prev/next/today/title/views row isn't pushed off-center by an
+// inline row of filter chips.
+// ============================================================================
+
+.snipeit-calendar-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--box-header-top-border-color, #ddd);
+}
+
+.snipeit-calendar-filter-button {
+  // Reserve horizontal space for the checkmark glyph up-front via a
+  // transparent placeholder so the button doesn't grow when its
+  // .active class is added. Without this the ::before content on
+  // `.active` shifts every other button in the row when a filter is
+  // toggled and makes the whole row jump.
+  padding: 4px 10px;
+  font-size: 13px;
+
+  &::before {
+    content: "\2713\00a0";
+    font-weight: bold;
+    visibility: hidden;
+  }
+}
+
+// ============================================================================
+// Calendar filter-button active-state styling (both themes).
+//
+// buildFilterButtons flips `.active` on selected filters. Bootstrap 3's
+// stock `.btn-default.active` only nudges the background a few shades
+// darker, which reads as "hovered" not "selected" and Snipe reported she
+// couldn't tell which filters were on. Force the active state to the
+// app's primary theme color with an inset border ring and a leading
+// checkmark glyph so a viewer can spot which filters are active without
+// squinting. Kept a11y-friendly with a real ::before content marker
+// rather than color alone (aria-pressed is toggled in JS on top of it).
+// ============================================================================
+
+.snipeit-calendar-filter-button.active,
+.snipeit-calendar-filter-button.active:hover,
+.snipeit-calendar-filter-button.active:focus,
+.snipeit-calendar-filter-button.active:active {
+  background-color: var(--main-theme-color) !important;
+  background-image: none !important;
+  border-color: ~"hsl(from var(--main-theme-color) h s calc(l - 15))" !important;
+  color: var(--nav-primary-text-color) !important;
+  box-shadow: inset 0 0 0 2px ~"hsl(from var(--main-theme-color) h s calc(l - 25))" !important;
+}
+
+.snipeit-calendar-filter-button.active::before {
+  visibility: visible;
+}
+
+.snipeit-calendar-filter-button.active:focus {
+  box-shadow: inset 0 0 0 2px ~"hsl(from var(--main-theme-color) h s calc(l - 25))",
+              0 0 0 3px ~"hsl(from var(--main-theme-color) h s calc(l + 20) / 0.5)" !important;
+}
+
+// Social login buttons on layouts/basic (login page).
+.btn-social.btn-google,
+.btn-social.btn-google:link,
+.btn-social.btn-google:visited {
+  background-color: var(--main-theme-color) !important;
+  color: var(--nav-primary-text-color) !important;
+  border-color: var(--main-theme-color) !important;
+}
+
+.btn-social.btn-google:hover,
+.btn-social.btn-google:focus,
+.btn-social.btn-google:active {
+  background-color: var(--main-theme-hover) !important;
+  color: var(--nav-primary-text-color) !important;
+  border-color: var(--main-theme-hover) !important;
+}
+
+/*
+ * Vertical side-tabs inside a box, used by the Settings → Sync Adapters
+ * page. Negative margin cancels .box-body's 10px padding on the sides
+ * we want flush against the box edges. Active-tab left border uses the
+ * same accent color and font-weight bump that .nav-tabs-custom uses
+ * for horizontal tabs, so the two visually match.
+ */
+.sync-adapters-tabs {
+  margin: -10px 0 -10px -10px;
+  display: flex;
+}
+
+.sync-adapters-tabs .adapter-tab-list {
+  flex: 0 0 300px;
+  padding: 0;
+  border-right: var(--table-border-row);
+}
+
+/* AdminLTE ships a hardcoded #f4f4f4 border-bottom between vertical
+   nav-stacked items via `.box .nav-stacked > li`, which reads as white
+   against the dark box background. Override with the theme-aware
+   variable to match the box's internal borders in both modes. */
+.sync-adapters-tabs .adapter-tab-list .nav-stacked > li {
+  border-bottom-color: var(--table-border-row-color);
+}
+
+.sync-adapters-tabs .adapter-tab-list .nav-pills > li > a {
+  color: var(--color-fg);
+  padding: 10px 16px;
+  padding-left: 10px;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background-color: transparent;
+}
+
+.sync-adapters-tabs .adapter-tab-list .nav-pills > li.active > a,
+.sync-adapters-tabs .adapter-tab-list .nav-pills > li.active > a:hover,
+.sync-adapters-tabs .adapter-tab-list .nav-pills > li.active > a:focus {
+  color: var(--color-fg);
+  background-color: transparent;
+  border-left-color: var(--main-theme-color);
+  font-weight: bold;
+}
+
+.sync-adapters-tabs .adapter-tab-content {
+  flex: 1;
+  padding: 15px 20px;
+  min-width: 0; // let long labels + tables shrink inside a flex row instead of stretching the whole panel past its box.
+}
+
+/* Small shim for side-tab min-width on mobile or smaller screens. */
+@media (max-width: 991px) {
+  .sync-adapters-tabs {
+    flex-direction: column;
+  }
+
+  .sync-adapters-tabs .adapter-tab-list {
+    flex: 0 0 auto;
+    border-right: 0;
+    border-bottom: var(--table-border-row);
+  }
+
+  .sync-adapters-tabs .adapter-tab-content {
+    padding: 15px 10px;
+  }
+}
+

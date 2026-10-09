@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Actions\Manufacturers\DestroyManufacturerAction;
+use App\Enums\FileStorage;
+use App\Exceptions\Handler;
 use App\Exceptions\ItemStillHasChildren;
 use App\Helpers\Helper;
 use App\Http\Controllers\Controller;
@@ -216,8 +218,8 @@ class ManufacturersController extends Controller
             DestroyManufacturerAction::run($manufacturer);
         } catch (ItemStillHasChildren $e) {
             return response()->json(Helper::formatStandardApiResponse('error', null, trans('general.bulk_delete_associations.general_assoc_warning', ['item' => trans('general.manufacturer')])));
-        } catch (\Exception $e) {
-            report($e);
+        } catch (\Throwable $e) {
+            Handler::reportOrRethrow($e);
 
             return response()->json(Helper::formatStandardApiResponse('error', null, trans('general.something_went_wrong')));
         }
@@ -295,7 +297,7 @@ class ManufacturersController extends Controller
         // they may not have a ->name value but we want to display something anyway
         foreach ($manufacturers as $manufacturer) {
             $manufacturer->use_text = $manufacturer->name;
-            $manufacturer->use_image = ($manufacturer->image) ? Storage::disk('public')->url('manufacturers/'.$manufacturer->image, $manufacturer->image) : null;
+            $manufacturer->use_image = ($manufacturer->image) ? Storage::disk('public')->url(FileStorage::Manufacturers->publicPath().$manufacturer->image, $manufacturer->image) : null;
         }
 
         return (new SelectlistTransformer)->transformSelectlist($manufacturers);

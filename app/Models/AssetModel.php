@@ -2,7 +2,9 @@
 
 namespace App\Models;
 
+use App\Enums\FileStorage;
 use App\Http\Traits\TwoColumnUniqueUndeletedTrait;
+use App\Models\Traits\HasImageUpload;
 use App\Models\Traits\HasUploads;
 use App\Models\Traits\Loggable;
 use App\Models\Traits\Requestable;
@@ -14,6 +16,7 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Watson\Validating\ValidatingTrait;
 
@@ -26,10 +29,16 @@ use Watson\Validating\ValidatingTrait;
 class AssetModel extends SnipeModel
 {
     use HasFactory;
+    use HasImageUpload;
     use HasUploads;
     use Loggable, Presentable, Requestable;
     use SoftDeletes;
     use TwoColumnUniqueUndeletedTrait;
+
+    public static function fileStorage(): FileStorage
+    {
+        return FileStorage::Models;
+    }
 
     /**
      * Whether the model should inject its identifier to the unique
@@ -122,6 +131,30 @@ class AssetModel extends SnipeModel
     {
         static::forceDeleted(function (AssetModel $assetModel) {
             $assetModel->requests()->forceDelete();
+
+            // Image + Files-tab attachments wipe on hard-delete only, so
+            // a restored soft-deleted model keeps its image and files.
+            // Attachment action_log rows get soft-deleted (not
+            // hard-deleted) so the audit trail of what was attached-
+            // and-when survives even after the parent is gone.
+            if ($assetModel->image) {
+                try {
+                    Storage::disk('public')->delete(FileStorage::Models->publicPath().$assetModel->image);
+                } catch (\Exception $e) {
+                    Log::info($e->getMessage());
+                }
+            }
+
+            foreach ($assetModel->uploads as $upload) {
+                if (($path = $upload->uploads_file_path()) !== null) {
+                    try {
+                        Storage::delete($path);
+                    } catch (\Exception $e) {
+                        Log::info($e->getMessage());
+                    }
+                }
+                $upload->delete();
+            }
         });
 
         static::softDeleted(function (AssetModel $assetModel) {
@@ -148,9 +181,41 @@ class AssetModel extends SnipeModel
         return $this->hasMany(Asset::class, 'model_id')->RTD();
     }
 
+    /**
+     * Bulk-fulfillment eligibility hook. Overrides the Requestable
+     * trait's default (which probes numRemaining) since AssetModel
+     * fulfills by handing out concrete assets of the model rather
+     * than a qty count. Returns true when at least one available
+     * (RTD) asset of this model exists.
+     */
+    protected function hasStockForBulkFulfillment(): bool
+    {
+        return $this->availableAssets()->exists();
+    }
+
     public function assignedAssets()
     {
         return $this->hasMany(Asset::class, 'model_id')->Deployed();
+    }
+
+    /**
+     * How many distinct Orders this asset model has appeared on across
+     * all of its Asset instances. Since each Asset is 1:1 with a
+     * transaction via AssetObserver::created, this is the count of
+     * distinct order_ids on order_items linked to any of this model's
+     * assets. Useful for the info-panel "how many times has this model
+     * been ordered" hint.
+     */
+    public function ordersCount(): int
+    {
+        // Purchases only (positive qty) — see HasOrders::ordersCount for
+        // the rationale on filtering out corrections/consumption events.
+        return (int) OrderItem::query()
+            ->where('item_type', Asset::class)
+            ->whereIn('item_id', $this->assets()->select('id'))
+            ->where('qty', '>', 0)
+            ->distinct()
+            ->count('order_id');
     }
 
     public function archivedAssets()
@@ -204,6 +269,11 @@ class AssetModel extends SnipeModel
     public function category()
     {
         return $this->belongsTo(Category::class, 'category_id');
+    }
+
+    public function requireAcceptance(): bool
+    {
+        return (bool) ($this->category?->require_acceptance ?? false);
     }
 
     /**
@@ -281,7 +351,7 @@ class AssetModel extends SnipeModel
     public function getImageUrl($path = null)
     {
         if ($this->image) {
-            return Storage::disk('public')->url(app('models_upload_path').$this->image);
+            return Storage::disk('public')->url(FileStorage::Models->publicPath().$this->image);
         }
 
         return false;
@@ -336,7 +406,7 @@ class AssetModel extends SnipeModel
      *
      * @version v3.5
      */
-    public function scopeRequestableModels($query)
+    public function scopeRequestable($query)
     {
         return $query->where('requestable', '1');
     }
@@ -429,8 +499,8 @@ class AssetModel extends SnipeModel
      */
     public function scopeOrderPercentRemaining($query, $order)
     {
-        $direction = strtolower($order) === 'asc' ? 'asc' : 'desc';
+        $order = strtolower($order) === 'asc' ? 'asc' : 'desc';
 
-        return $query->orderByRaw('CASE WHEN assets_count = 0 THEN 0 ELSE (remaining * 100.0 / assets_count) END '.$direction);
+        return $query->orderByRaw('CASE WHEN assets_count = 0 THEN 0 ELSE (remaining * 100.0 / assets_count) END '.$order);
     }
 }

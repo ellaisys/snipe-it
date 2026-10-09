@@ -2,12 +2,16 @@
 
 namespace App\Models;
 
+use App\Enums\FileStorage;
 use App\Events\CheckoutableCheckedOut;
 use App\Exceptions\CheckoutNotAllowed;
 use App\Helpers\Helper;
 use App\Http\Traits\UniqueUndeletedTrait;
 use App\Models\Traits\Acceptable;
 use App\Models\Traits\CompanyableTrait;
+use App\Models\Traits\HasCalendarEvents;
+use App\Models\Traits\HasImageUpload;
+use App\Models\Traits\HasOrders;
 use App\Models\Traits\HasUploads;
 use App\Models\Traits\Loggable;
 use App\Models\Traits\Requestable;
@@ -22,6 +26,7 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Watson\Validating\ValidatingTrait;
 
@@ -29,6 +34,14 @@ use Watson\Validating\ValidatingTrait;
  * Model for Assets.
  *
  * @version v1.0
+ *
+ * @property ?int $location_id
+ * @property Carbon|string|null $next_audit_date
+ * @property Carbon|string|null $last_audit_date
+ * @property Carbon|string|null $asset_eol_date
+ * @property ?int $company_id
+ * @property Carbon|string|null $last_checkin
+ * @property bool $requestable
  */
 class Asset extends Depreciable
 {
@@ -37,7 +50,10 @@ class Asset extends Depreciable
     // protected $with = ['model', 'adminuser', 'location', 'company'];
 
     use CompanyableTrait;
+    use HasCalendarEvents;
     use HasFactory;
+    use HasImageUpload;
+    use HasOrders;
     use HasUploads;
     use Loggable;
     use Presentable;
@@ -53,6 +69,11 @@ class Asset extends Depreciable
     public const USER = 'user';
 
     use Acceptable;
+
+    public static function fileStorage(): FileStorage
+    {
+        return FileStorage::Assets;
+    }
 
     /**
      * Run after the checkout acceptance was declined by the user
@@ -116,6 +137,8 @@ class Asset extends Depreciable
      * NULL and 0 as different. `set` normalizes on write, `get`
      * normalizes on read so legacy rows already storing 0 present as
      * null at the model boundary until they're re-saved.
+     *
+     * @return Attribute<int|null, int|null>
      */
     protected function locationId(): Attribute
     {
@@ -125,6 +148,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<int|null, int|null>
+     */
     protected function companyId(): Attribute
     {
         return Attribute::make(
@@ -237,6 +263,7 @@ class Asset extends Depreciable
         'category' => ['name'],
         'manufacturer' => ['name'],
         'assigned_to' => ['name'],
+        'externalSource' => ['primary_mac', 'primary_ip', 'os', 'os_version'],
     ];
 
     /**
@@ -259,10 +286,53 @@ class Asset extends Depreciable
     {
         static::forceDeleted(function (Asset $asset) {
             $asset->requests()->forceDelete();
+
+            // Image + Files-tab attachments wipe on hard-delete only, so
+            // a restored soft-deleted asset keeps its image and files.
+            // Attachment action_log rows get soft-deleted (not
+            // hard-deleted) so the audit trail of what was attached-
+            // and-when survives even after the parent is gone.
+            if ($asset->image) {
+                try {
+                    Storage::disk('public')->delete(FileStorage::Assets->publicPath().$asset->image);
+                } catch (\Exception $e) {
+                    Log::info($e->getMessage());
+                }
+            }
+
+            foreach ($asset->uploads as $upload) {
+                if (($path = $upload->uploads_file_path()) !== null) {
+                    try {
+                        Storage::delete($path);
+                    } catch (\Exception $e) {
+                        Log::info($e->getMessage());
+                    }
+                }
+                $upload->delete();
+            }
         });
 
         static::softDeleted(function (Asset $asset) {
             $asset->requests()->delete();
+        });
+
+        // When an asset moves between companies, its own calendar
+        // events pick up the new company_id through the HasCalendarEvents
+        // trait's updated hook, but child Maintenances resolve their
+        // calendar_events company_id from the parent asset and would
+        // otherwise keep the stale value until they themselves are
+        // touched. Cascade the re-sync here so FMCS filtering stays
+        // accurate on both the asset's and the maintenance's rows.
+        static::updated(function (Asset $asset) {
+            if (array_key_exists('company_id', $asset->getChanges())) {
+                // withoutGlobalScopes bypasses CompanyableChildScope on
+                // Maintenance so the cascade reaches every related
+                // maintenance regardless of the saving context's auth
+                // state (CLI, system jobs, cross-tenant admin saves).
+                $asset->maintenances()->withoutGlobalScopes()->get()->each(
+                    fn (Maintenance $m) => $m->forceSyncCalendarEvents(),
+                );
+            }
         });
     }
 
@@ -316,6 +386,13 @@ class Asset extends Depreciable
     {
         $this->rules += $this->customFieldValidationRules();
 
+        if ($this->model_id && $this->model && (string) $this->model->require_serial === '1') {
+            $this->rules['serial'] = array_merge(
+                array_filter($this->rules['serial'] ?? [], fn ($r) => $r !== 'nullable'),
+                ['required'],
+            );
+        }
+
         return parent::save($params);
     }
 
@@ -327,15 +404,26 @@ class Asset extends Depreciable
     /**
      * Returns the warranty expiration date as Carbon object
      *
-     * @return Carbon|null
+     * @return Attribute<Carbon|null, never>
+     *
+     * @SuppressWarnings("PHPMD.UnusedFormalParameter")
+     * `$value` is unused because this is a computed accessor - the
+     * warranty expiration is derived from purchase_date +
+     * warranty_months, not stored as its own column. Laravel's
+     * Attribute closure signature is positional though (`$value` must
+     * be the first parameter), so we can't drop it. Suppression tells
+     * PHPMD / Codacy to stop flagging.
      */
     protected function warrantyExpires(): Attribute
     {
         return Attribute::make(
-            get: fn (mixed $value, array $attributes) => ($attributes['warranty_months'] && $attributes['purchase_date']) ? Carbon::parse($attributes['purchase_date'])->addMonths((int) $attributes['warranty_months']) : null,
+            get: fn (mixed $value, array $attributes) => (! empty($attributes['warranty_months']) && ! empty($attributes['purchase_date'])) ? Carbon::parse($attributes['purchase_date'])->addMonths((int) $attributes['warranty_months']) : null,
         );
     }
 
+    /**
+     * @return Attribute<string|null, never>
+     */
     protected function warrantyExpiresFormattedDate(): Attribute
     {
 
@@ -344,6 +432,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<float|null, never>
+     */
     protected function warrantyExpiresDiff(): Attribute
     {
         return Attribute::make(
@@ -352,6 +443,9 @@ class Asset extends Depreciable
 
     }
 
+    /**
+     * @return Attribute<string|null, never>
+     */
     protected function warrantyExpiresDiffForHumans(): Attribute
     {
         return Attribute::make(
@@ -360,6 +454,9 @@ class Asset extends Depreciable
 
     }
 
+    /**
+     * @return Attribute<string|null, never>
+     */
     protected function lastAuditFormattedDate(): Attribute
     {
 
@@ -368,6 +465,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<float|null, never>
+     */
     protected function lastAuditDiff(): Attribute
     {
         return Attribute::make(
@@ -376,6 +476,9 @@ class Asset extends Depreciable
 
     }
 
+    /**
+     * @return Attribute<string|null, never>
+     */
     protected function lastAuditDiffForHumans(): Attribute
     {
         return Attribute::make(
@@ -384,6 +487,9 @@ class Asset extends Depreciable
 
     }
 
+    /**
+     * @return Attribute<string|null, never>
+     */
     protected function nextAuditFormattedDate(): Attribute
     {
 
@@ -392,6 +498,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<float|null, never>
+     */
     protected function nextAuditDiffInDays(): Attribute
     {
         return Attribute::make(
@@ -399,6 +508,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<string|null, never>
+     */
     protected function nextAuditDiffForHumans(): Attribute
     {
         return Attribute::make(
@@ -407,6 +519,9 @@ class Asset extends Depreciable
 
     }
 
+    /**
+     * @return Attribute<Carbon|null, never>
+     */
     protected function eolDate(): Attribute
     {
 
@@ -424,6 +539,9 @@ class Asset extends Depreciable
 
     }
 
+    /**
+     * @return Attribute<string|null, never>
+     */
     protected function eolFormattedDate(): Attribute
     {
         return Attribute::make(
@@ -431,6 +549,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<float|null, never>
+     */
     protected function eolDiffInDays(): Attribute
     {
         return Attribute::make(
@@ -439,6 +560,9 @@ class Asset extends Depreciable
 
     }
 
+    /**
+     * @return Attribute<string|null, never>
+     */
     protected function eolDiffForHumans(): Attribute
     {
 
@@ -448,6 +572,9 @@ class Asset extends Depreciable
 
     }
 
+    /**
+     * @return Attribute<string|null, never>
+     */
     protected function expectedCheckinFormattedDate(): Attribute
     {
         return Attribute::make(
@@ -455,6 +582,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<string|null, never>
+     */
     protected function expectedCheckinDiffForHumans(): Attribute
     {
         return Attribute::make(
@@ -543,7 +673,7 @@ class Asset extends Depreciable
      * @param  Carbon  $checkout_at
      * @param  Carbon  $expected_checkin
      * @param  string  $note
-     * @param  null  $name
+     * @param  string|null  $name
      * @return bool
      *
      * @since  [v3.0]
@@ -926,11 +1056,11 @@ class Asset extends Depreciable
     public function getImageUrl($path = null)
     {
         if ($this->image && ! empty($this->image)) {
-            return Storage::disk('public')->url(app('assets_upload_path').e($this->image));
+            return Storage::disk('public')->url(FileStorage::Assets->publicPath().e($this->image));
         } elseif ($this->model && ! empty($this->model->image)) {
-            return Storage::disk('public')->url(app('models_upload_path').e($this->model->image));
+            return Storage::disk('public')->url(FileStorage::Models->publicPath().e($this->model->image));
         } elseif ($this->model?->category && ! empty($this->model->category->image)) {
-            return Storage::disk('public')->url(app('categories_upload_path').e($this->model->category->image));
+            return Storage::disk('public')->url(FileStorage::Categories->publicPath().e($this->model->category->image));
         }
 
         return false;
@@ -1030,7 +1160,7 @@ class Asset extends Depreciable
      */
     public function maintenances()
     {
-        return $this->hasMany(Maintenance::class, 'asset_id')
+        return $this->morphMany(Maintenance::class, 'item')
             ->orderBy('created_at', 'desc');
     }
 
@@ -1133,6 +1263,18 @@ class Asset extends Depreciable
     public function licenseseats()
     {
         return $this->hasMany(LicenseSeat::class, 'asset_id');
+    }
+
+    /**
+     * Sync-adapter side row: identity (source + external_id) plus
+     * last-known network / OS inventory (primary MAC / IP / OS /
+     * OS version / last seen). Nullable relation: only assets that
+     * have been synced from an adapter have a row. Detail view +
+     * assets table render these fields when the relation is present.
+     */
+    public function externalSource()
+    {
+        return $this->hasOne(AssetExternalSource::class);
     }
 
     /**
@@ -1335,7 +1477,13 @@ class Asset extends Depreciable
 
     public function getAccessoryCost()
     {
-        return (float) $this->accessories()->sum('purchase_cost');
+        // purchase_cost no longer lives on the accessories parent —
+        // per-unit cost is on the last OrderItem's price, with the
+        // parent's default_purchase_cost as fallback. lastOrderDefaults()
+        // encapsulates that fallback ladder.
+        return (float) $this->accessories()
+            ->get()
+            ->sum(fn ($accessory) => (float) ($accessory->lastOrderDefaults()['unit_cost'] ?? 0));
     }
 
     /**
@@ -1351,7 +1499,7 @@ class Asset extends Depreciable
      * in the database, but here we are.
      *
      * @param  $value
-     * @return void
+     * @return Attribute<string|null, string|null>
      */
     protected function nextAuditDate(): Attribute
     {
@@ -1361,6 +1509,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<string|null, string|null>
+     */
     protected function lastAuditDate(): Attribute
     {
         return Attribute::make(
@@ -1369,6 +1520,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<string|null, string|null>
+     */
     protected function lastCheckout(): Attribute
     {
         return Attribute::make(
@@ -1377,6 +1531,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<string|null, string|null>
+     */
     protected function lastCheckin(): Attribute
     {
         return Attribute::make(
@@ -1385,6 +1542,9 @@ class Asset extends Depreciable
         );
     }
 
+    /**
+     * @return Attribute<string|null, string|null>
+     */
     protected function assetEolDate(): Attribute
     {
         return Attribute::make(
@@ -1400,7 +1560,7 @@ class Asset extends Depreciable
      * This will also correctly parse a 1/0 if "true"/"false" is passed.
      *
      * @param  $value
-     * @return void
+     * @return Attribute<int, mixed>
      */
     protected function requestable(): Attribute
     {
@@ -1657,6 +1817,19 @@ class Asset extends Depreciable
     }
 
     /**
+     * Query builder scope for Assets whose asset_eol_date is in the past. Used by
+     * the NeedsAttention dashboard tile count and the hardware/past-eol view.
+     *
+     * @return \Illuminate\Database\Query\Builder Modified query builder
+     */
+    public function scopePastEol($query)
+    {
+        return $query->whereNotNull('assets.asset_eol_date')
+            ->where('assets.asset_eol_date', '<', Carbon::now()->format('Y-m-d'))
+            ->NotArchived();
+    }
+
+    /**
      * Query builder scope for Assets that are due for auditing OR overdue, based on the assets.next_audit_date
      * and settings.audit_warning_days.
      *
@@ -1755,16 +1928,57 @@ class Asset extends Depreciable
         );
     }
 
-    /**
-     * Query builder scope for Archived assets counting
-     *
-     * This is primarily used for the tab counters so that IF the admin
-     * has chosen to not display archived assets in their regular lists
-     * and views, it will return the correct number.
-     *
-     * @param  \Illuminate\Database\Query\Builder  $query  Query builder instance
-     * @return \Illuminate\Database\Query\Builder Modified query builder
-     */
+    public function calendarEventCompanyId(): ?int
+    {
+        return $this->company_id;
+    }
+
+    public function calendarEventDefinitions(): array
+    {
+        // Most entries are marked all_day: true because they represent
+        // date-only obligations (an audit due on 2026-09-15, an EOL
+        // date, a warranty expiration). The mixed cast metadata on
+        // Asset (next_audit_date is 'datetime:m-d-Y', expected_checkin
+        // and last_checkout are 'datetime', asset_eol_date has no cast)
+        // means cast-based auto-detection wouldn't catch them
+        // uniformly, so the flag is explicit per entry.
+        //
+        // last_checkout is the one exception. Checkout happens at a
+        // specific moment in time, so the calendar shows it at that
+        // hour rather than as an all-day marker. The transformer's
+        // isAllDayField() reads all_day directly from this array, so
+        // flipping the flag here is all that's needed to switch the
+        // rendered event's shape.
+        return [
+            [
+                'field' => 'next_audit_date',
+                'event_type' => 'asset.audit_due',
+                'all_day' => true,
+            ],
+            [
+                'field' => 'expected_checkin',
+                'event_type' => 'asset.expected_checkin',
+                'all_day' => true,
+            ],
+            [
+                'field' => 'last_checkout',
+                'event_type' => 'asset.checkout',
+                'all_day' => false,
+            ],
+            [
+                'field' => 'asset_eol_date',
+                'event_type' => 'asset.eol',
+                'all_day' => true,
+            ],
+            [
+                'field' => 'warranty_expires',
+                'event_type' => 'asset.warranty_expiration',
+                'trigger_fields' => ['purchase_date', 'warranty_months'],
+                'all_day' => true,
+            ],
+        ];
+    }
+
     public function scopeAssetsForShow($query)
     {
         // Pluck IDs then whereIn — do NOT replace with whereHas. whereHas generates a correlated EXISTS per row and causes severe slowdowns in withCount contexts.
@@ -1808,7 +2022,7 @@ class Asset extends Depreciable
      * @param  \Illuminate\Database\Query\Builder  $query  Query builder instance
      * @return \Illuminate\Database\Query\Builder Modified query builder
      */
-    public function scopeRequestableAssets($query): Builder
+    public function scopeRequestable($query): Builder
     {
         $table = $query->getModel()->getTable();
 
@@ -2051,6 +2265,32 @@ class Asset extends Depreciable
     public function scopeOrderCompany($query, $order)
     {
         return $query->leftJoin('companies as company_sort', 'assets.company_id', '=', 'company_sort.id')->orderBy('company_sort.name', $order);
+    }
+
+    /**
+     * Sort by a sync-adapter external-source column (primary_mac,
+     * primary_ip, os, os_version, last_seen). LeftJoin so unsynced
+     * assets sort as nulls rather than dropping out. Join is on the
+     * unique asset_id index in asset_external_sources, so cost is
+     * an index lookup per row.
+     *
+     * Column argument is whitelisted by the caller (AssetsController's
+     * sort switch) so it's never user-controlled at this layer, but
+     * we still validate against the known column set as defense-in-
+     * depth against a caller regression.
+     */
+    public function scopeOrderExternalSource($query, string $order, string $column)
+    {
+        if (! in_array($column, ['primary_mac', 'primary_ip', 'os', 'os_version', 'last_seen'], true)) {
+            return $query;
+        }
+
+        return $query->leftJoin(
+            'asset_external_sources as ext_src_sort',
+            'assets.id',
+            '=',
+            'ext_src_sort.asset_id',
+        )->orderBy('ext_src_sort.'.$column, $order);
     }
 
     /**

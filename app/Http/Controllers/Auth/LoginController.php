@@ -76,7 +76,7 @@ class LoginController extends Controller
         $this->loginViaRemoteUser($request);
         $this->loginViaSaml($request);
         if (Auth::check()) {
-            return redirect()->intended('/');
+            return Helper::safeIntended('/');
         }
 
         if (! $request->session()->has('loggedout')) {
@@ -205,16 +205,22 @@ class LoginController extends Controller
             Log::debug('Local user '.$request->input('username').' exists in database. Updating existing user against LDAP.');
 
             $ldap_attr = Ldap::parseAndMapLdapAttributes($ldap_user);
+            $settings = Setting::getSettings();
 
             $user->password = $user->noPassword();
-            if (Setting::getSettings()->ldap_pw_sync == '1') {
+            if ($settings->ldap_pw_sync == '1') {
                 $user->password = bcrypt($request->input('password'));
             }
 
             $user->last_login = \Carbon::now();
-            $user->email = $ldap_attr['email'];
-            $user->first_name = $ldap_attr['firstname'];
-            $user->last_name = $ldap_attr['lastname']; // FIXME (or TODO?) - do we need to map additional fields that we now support? E.g. country, phone, etc.
+
+            // Refresh every mapped field from the LDAP payload. Shared
+            // with Ldap::createUserFromLdap so the field list lives in
+            // one place. Bulk sync via snipe-it:ldap-sync remains the
+            // canonical path for the fields that need a re-bind
+            // (manager, active_flag, etc.).
+            Ldap::applyLdapAttributesToUser($user, $ldap_attr);
+
             $user->saveQuietly();
         } // End if(!user)
 
@@ -224,6 +230,28 @@ class LoginController extends Controller
     private function loginViaRemoteUser(Request $request)
     {
         $header_name = Setting::getSettings()->login_remote_user_header_name ?: 'REMOTE_USER';
+
+        // Defensive runtime guard against HTTP_-prefixed server variable
+        // names, which PHP populates directly from inbound request headers.
+        // Honoring one would let any unauthenticated caller spoof the
+        // header and get logged in as any active user (pre-auth takeover).
+        // Settings-side validation blocks this at save time now, but a
+        // pre-fix install may already have an HTTP_-prefixed value
+        // persisted, so refuse to use it at runtime regardless. Reported
+        // by Brayden Arnold. See advisory for details.
+        if (preg_match('/^HTTP_/i', $header_name)) {
+            Log::warning(sprintf(
+                'Refusing to honor HTTP_-prefixed login_remote_user_header_name "%s". '.
+                'PHP populates $_SERVER[HTTP_*] from inbound request headers, so this value '.
+                'would allow any client to forge the auth header. Change the setting to '.
+                'REMOTE_USER (default) or to a server variable your upstream sets from a '.
+                'vetted source.',
+                $header_name,
+            ));
+
+            return;
+        }
+
         $remote_user = $request->server($header_name);
         if (! isset($remote_user)) {
             $remote_user = $request->server('REDIRECT_'.$header_name);
@@ -294,11 +322,12 @@ class LoginController extends Controller
             return redirect()->back()->withInput()->withErrors($validator);
         }
 
-        // Set the custom lockout attempts from the env and sett the custom lockout throttle from the env.
-        // We divide decayMinutes by 60 here to get minutes, since Laravel changed the default from minutes
-        // to seconds, and we don't want to break limits on existing systems
-        $this->maxAttempts = config('auth.passwords.users.throttle.max_attempts');
-        $this->decayMinutes = (config('auth.passwords.users.throttle.lockout_duration') / 60);
+        // Read the local login-form throttle ceiling and lockout window
+        // from config. decayMinutes gets the raw seconds value divided
+        // by 60 so LOGIN_LOCKOUT_DURATION stays in seconds for admins
+        // while Laravel's ThrottlesLogins trait sees minutes.
+        $this->maxAttempts = config('auth.login_throttle.max_attempts');
+        $this->decayMinutes = config('auth.login_throttle.lockout_duration') / 60;
 
         if ($lockedOut = $this->hasTooManyLoginAttempts($request)) {
             $this->fireLockoutEvent($request);
@@ -308,8 +337,12 @@ class LoginController extends Controller
 
         $user = null;
 
-        // Should we even check for LDAP users?
-        if (Setting::getSettings()->ldap_enabled) { // avoid hitting the $this->ldap
+        // Should we even check for LDAP users? Skip LDAP entirely when
+        // the app is in demo mode. The LDAP wizard's
+        // demo seed points at Forumsys as a reference config for
+        // visitors to click through, we don't want the login form to
+        // actually try to bind against it on every demo sign-in.
+        if (Setting::getSettings()->ldap_enabled && ! config('app.lock_passwords')) { // avoid hitting the $this->ldap
             Log::debug('LDAP is enabled.');
             try {
                 Log::debug('Attempting to log user in by LDAP authentication.');
@@ -347,7 +380,7 @@ class LoginController extends Controller
         }
 
         // Redirect to the users page
-        return redirect()->intended()->with('success', trans('auth/message.signin.success'));
+        return Helper::safeIntended()->with('success', trans('auth/message.signin.success'));
     }
 
     /**
@@ -441,6 +474,17 @@ class LoginController extends Controller
         }
 
         $user = auth()->user();
+
+        // Short-circuit if the stored secret is missing or too short to
+        // be a valid base32 TOTP seed. We cannot gate on two_factor_enrolled
+        // here because the first-time enrollment confirmation POSTs through this method
+        // too, with enrolled still at 0.
+        if (strlen((string) $user->two_factor_secret) < 16) {
+            \Log::debug('two_factor_secret is too short to be valid, redirecting to enrollment page');
+
+            return redirect()->route('two-factor-enroll');
+        }
+
         $secret = $request->input('two_factor_secret');
 
         if (Google2FA::verifyKey($user->two_factor_secret, $secret)) {
@@ -449,7 +493,7 @@ class LoginController extends Controller
             $user->saveQuietly();
             $request->session()->put('2fa_authed', $user->id);
 
-            return redirect()->intended()->with('success', trans('auth/message.signin.success'));
+            return Helper::safeIntended()->with('success', trans('auth/message.signin.success'));
         }
 
         return redirect()->route('two-factor')->with('error', trans('auth/message.two_factor.invalid_code'));

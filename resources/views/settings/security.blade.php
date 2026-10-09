@@ -57,7 +57,7 @@
                                     </x-slot:input>
                                 </x-form.row>
 
-                                <x-form.legend>
+                                <x-form.legend help_text="{{ trans('admin/settings/general.pwd_secure_complexity_help') }}">
                                     {{ trans('admin/settings/general.legends.passwords') }}
                                 </x-form.legend>
 
@@ -83,7 +83,6 @@
                                 <x-form.row
                                     name="pwd_secure_complexity"
                                     :label="trans('admin/settings/general.pwd_secure_complexity')"
-                                    :help_text="trans('admin/settings/general.pwd_secure_complexity_help')"
                                 >
                                     <x-slot:input>
                                         <label class="form-control">
@@ -156,7 +155,7 @@
                                     <x-form.row
                                         name="login_remote_user_header_name"
                                         :label="trans('admin/settings/general.login_remote_user_header_name_text')"
-                                        :help_html="trans('admin/settings/general.login_remote_user_header_name_help')"
+                                        help_html="{!! trans('admin/settings/general.login_remote_user_header_name_help') !!}"
                                         help_icon="warning"
                                     >
                                         <x-slot:input>

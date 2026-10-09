@@ -20,7 +20,7 @@ class AccessoryImporter extends ItemImporter
         // columns are left out of $this->item so update mode preserves the
         // DB value, and present-but-empty cells land as null so update mode
         // clears the DB value. The base sanitize's reject-empty pass is
-        // suppressed via the sanitizeItemForStoring override below.
+        // disabled by $rejectEmptyOnUpdate on ItemImporter.
         $this->item = [];
 
         // Shared lookup fields. Present-and-empty clears the FK; absent
@@ -50,7 +50,9 @@ class AccessoryImporter extends ItemImporter
 
         $this->setItemFromCsvIfPresent($row, 'name', 'item_name');
         $this->setItemFromCsvIfPresent($row, 'notes');
-        $this->setItemFromCsvIfPresent($row, 'order_number');
+        // order_number is not on the Accessory model any more — recorded
+        // as an Order + OrderItem via recordOrderForImportedRow() after
+        // the create-branch save below.
         $this->setItemFromCsvIfPresent($row, 'purchase_cost');
         $this->setItemFromCsvIfPresent($row, 'model_number');
         $this->setItemFromCsvIfPresent($row, 'min_amt');
@@ -72,6 +74,14 @@ class AccessoryImporter extends ItemImporter
             }
         }
 
+        // See ConsumableImporter::handle for the default_* mirror rationale.
+        if (array_key_exists('supplier_id', $this->item)) {
+            $this->item['default_supplier_id'] = $this->item['supplier_id'];
+        }
+        if (array_key_exists('purchase_cost', $this->item)) {
+            $this->item['default_purchase_cost'] = $this->item['purchase_cost'];
+        }
+
         // Internal signals used by the checkout logic below; neither is
         // fillable on Accessory so sanitize's fillable filter drops them.
         $this->item['checkout_class'] = $this->findCsvMatch($row, 'checkout_class');
@@ -79,17 +89,6 @@ class AccessoryImporter extends ItemImporter
         $this->item['created_by'] = $this->created_by;
 
         $this->createAccessoryIfNotExists($row);
-    }
-
-    /**
-     * Override the base sanitize to skip the reject-empty pass. See handle()
-     * above for the matching item-population.
-     *
-     * @SuppressWarnings(PHPMD.UnusedFormalParameter)
-     */
-    protected function sanitizeItemForStoring($model, $updating = false)
-    {
-        return collect($this->item)->only($model->getFillable())->toArray();
     }
 
     /**
@@ -114,8 +113,15 @@ class AccessoryImporter extends ItemImporter
             }
 
             $this->log('Updating Accessory');
-            $accessory->update($this->sanitizeItemForUpdating($accessory));
-            // update() already saves the model, no need to call save() again while Model::unguard() is active
+            $this->item['model_number'] = trim($this->findCsvMatch($row, 'model_number'));
+            // qty routes through adjustQuantity so a CSV qty change
+            // becomes a QuantityAdjust log entry, matching the API
+            // update contract. applyUpdateWithQtyAdjust calls
+            // $model->update() internally (already saves), so no
+            // additional save() is needed even with Model::unguard()
+            // active — supersedes the develop cleanup that dropped the
+            // redundant post-update save().
+            $this->applyUpdateWithQtyAdjust($accessory, $this->sanitizeItemForUpdating($accessory));
             $accessory->setImported(true);
             $this->recordUpdated();
 
@@ -133,6 +139,7 @@ class AccessoryImporter extends ItemImporter
         if ($accessory->save()) {
             $this->log('Accessory '.$name.' was created');
             $this->recordCreated();
+            $this->recordOrderForImportedRow($accessory, $row);
 
             $this->maybeCheckoutAccessory($accessory);
 
@@ -192,6 +199,7 @@ class AccessoryImporter extends ItemImporter
                 false,
             ));
             $this->log('Accessory '.$accessory->name.' checked out to '.($target->name ?? $target->username ?? $target->id));
+            $this->maybeSendWelcomeEmail($target);
         } else {
             $this->logError($checkout, 'AccessoryCheckout');
         }

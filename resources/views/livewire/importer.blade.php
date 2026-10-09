@@ -20,6 +20,14 @@
     </div>
 @endif
 
+@if($this->showFmcsRestrictionNotice)
+    <div class="col-md-12">
+        <x-alert type="info" icon="tip">
+            {{ trans('general.fmcs_import_restriction_note') }}
+        </x-alert>
+    </div>
+@endif
+
         @if($import_errors)
           <div class="col-md-12">
             <div class="box box-default">
@@ -85,20 +93,18 @@
                                     </div>
                                 @else
 
-                                @if (count($selectedIds) > 0)
                                     <div class="row" style="padding-bottom: 10px;">
                                         <div class="col-md-12">
                                             <button type="button"
                                                     class="btn btn-danger"
                                                     data-toggle="modal"
                                                     data-target="#bulkDeleteImportsModal"
-                                                @disabled(config('app.lock_passwords'))>
+                                                @disabled(config('app.lock_passwords') || count($selectedIds) === 0)>
                                                 <i class="fas fa-trash" aria-hidden="true"></i>
                                                 {{ trans('admin/hardware/message.import.bulk_delete.button', ['count' => count($selectedIds)]) }}
                                             </button>
                                         </div>
                                     </div>
-                                @endif
 
                                 <table data-id-table="upload-table"
                                         data-side-pagination="client"
@@ -135,7 +141,7 @@
 
                                     @foreach($this->files as $currentFile)
 
-                                        <tr style="{{ ($this->activeFile && ($currentFile->id == $this->activeFile->id)) ? 'font-weight: bold' : '' }}">
+                                        <tr wire:key="import-row-{{ $currentFile->id }}" style="{{ ($this->activeFile && ($currentFile->id == $this->activeFile->id)) ? 'font-weight: bold' : '' }}">
                                                 <td>
                                                     <label class="sr-only" for="import-row-{{ $currentFile->id }}">
                                                         {{ trans('admin/hardware/message.import.bulk_delete.select_row', ['file' => $currentFile->file_path]) }}
@@ -198,8 +204,9 @@
 
                                                     @if (((auth()->user()->id == $currentFile->adminuser?->id) || (auth()->user()->isSuperUser())) && ! config('app.lock_passwords'))
                                                         <a href="#" wire:click.prevent="$set('activeFileId',null)" data-tooltip="true" data-title="{{ trans('general.delete') }}">
-                                                            <button class="btn btn-sm btn-danger" wire:click="destroy({{ $currentFile->id }})">
-                                                                <i class="fas fa-trash icon-white" aria-hidden="true"></i>
+                                                            <button class="btn btn-sm btn-danger" wire:click="destroy({{ $currentFile->id }})" wire:loading.attr="disabled" wire:target="destroy({{ $currentFile->id }})">
+                                                                <i class="fas fa-trash icon-white" aria-hidden="true" wire:loading.remove wire:target="destroy({{ $currentFile->id }})"></i>
+                                                                <i class="fas fa-spinner fa-spin icon-white" aria-hidden="true" wire:loading wire:target="destroy({{ $currentFile->id }})"></i>
                                                                 <span class="sr-only">{{ trans('general.delete') }}</span>
                                                             </button>
                                                         </a>
@@ -408,10 +415,24 @@
                                 <x-form.checkbox-row
                                     name="update"
                                     :label="trans('general.update_existing_values')"
-                                    :help_text="trans('admin/hardware/message.import.update_mode_help')"
+                                    :help_text="trans('general.update_mode_help')"
                                     :checked="(bool) $update"
                                     wire:model.live="update"
                                 />
+
+                                {{-- Only useful when Update Existing Values
+                                     is on. Default to clear-blanks behavior
+                                     unless the importing user explicitly opts in to
+                                     preserving DB values on blank CSV cells. --}}
+                                @if ($update)
+                                    <x-form.checkbox-row
+                                        name="preserve_blanks"
+                                        :label="trans('general.preserve_blank_cells_on_update')"
+                                        :help_text="trans('general.preserve_blank_cells_on_update_help')"
+                                        :checked="(bool) $preserve_blanks"
+                                        wire:model.live="preserve_blanks"
+                                    />
+                                @endif
                             @endif
 
                             @if ($typeOfImport === 'asset' && $snipeSettings->auto_increment_assets == 1 && $update)
@@ -422,7 +443,18 @@
                                 </div>
                             @endif
 
-                            @if ($typeOfImport === 'user')
+                            @if (($typeOfImport === 'user' || $this->hasUserCheckoutMapping) && $typeOfImport !== 'assetHistory')
+                                {{-- Also shown for non-user imports (asset,
+                                     accessory, etc.) when the current column
+                                     mapping includes any user-identifying
+                                     field, since those imports may check
+                                     items out to users. The welcome email
+                                     only fires for users that are actually
+                                     created by the importer; existing-user
+                                     matches don't retrigger it.
+
+                                     assetHistory is excluded because it
+                                     never creates users --}}
                                 <x-form.checkbox-row
                                     name="send_welcome"
                                     :label="trans('general.send_welcome_email_to_users')"
@@ -513,15 +545,22 @@
                                     @if (! empty($headerRow))
                                         @foreach ($headerRow as $index => $header)
                                             @php
-                                                // Skip CSV columns that the auto-map
-                                                // couldn't bind to any target for the
-                                                // current import type. If the user
-                                                // needs manual control they can
-                                                // pick a different import type in
-                                                // step 1 and the map re-runs.
+                                                // Render every CSV header, whether or
+                                                // not the auto-map bound it to a target.
+                                                // Auto-unmapped columns come through
+                                                // with $currentMapping = null and render
+                                                // with the "Do not import" placeholder
+                                                // selected; the user can pick a target
+                                                // from the dropdown if they want to. An
+                                                // earlier iteration of the wizard hid
+                                                // unmapped columns to keep the mapping
+                                                // step focused, but reporter feedback
+                                                // (swift2512 / Dewi4nt on #19450) was
+                                                // that people want to see every column
+                                                // so they can hand-map anything the
+                                                // auto-matcher missed.
                                                 $currentMapping = $field_map[$index] ?? null;
                                             @endphp
-                                            @continue(empty($currentMapping))
 
                                             <div class="form-group col-md-12" wire:key="header-row-{{ $index }}">
                                                 <label for="field_map.{{ $index }}" class="col-md-3 control-label text-right">{{ $header }}</label>
@@ -945,17 +984,32 @@
         // For the importFile part:
         $(function () {
 
+            // Client-side re-entry guard for the Process button. The server
+            // holds the actual per-import mutex (see the acquire/release
+            // block in Api\ImportController::process), which is what closes
+            // the concurrent-writer race for real; this flag just prevents
+            // the same-tab wizard from firing a second startProcessing while
+            // the first slice chain is still running. Cheap UX polish so
+            // the user isn't left wondering whether their impatient
+            // second-click did something.
+            var isProcessingImport = false;
+
             // The #import button lives inside #importMappingModal now, but
             // the modal is rendered as a sibling of #upload-table (not
             // inside it), so delegate from document to catch the click
             // regardless of where in the DOM the modal ends up after
             // Bootstrap moves it.
             $(document).on('click', '#importMappingModal #import', function () {
+                if (isProcessingImport) {
+                    return false;
+                }
                 if (!$wire.$get('typeOfImport')) {
                     $wire.$set('statusType', 'error');
                     $wire.$set('statusText', "An import type is required... "); //TODO: translate?
                     return;
                 }
+                isProcessingImport = true;
+                $(this).prop('disabled', true).attr('aria-busy', 'true');
                 $wire.$set('statusType', 'pending');
                 $wire.$set('statusText', '<i class="fa fa-spinner fa-spin" aria-hidden="true"></i> {{ trans('admin/hardware/form.processing_spinner') }}');
 
@@ -1055,6 +1109,7 @@
                         var isLastSlice = (sliceIndex === totalSlices - 1);
                         var payload = {
                             'import-update': !!$wire.$get('update'),
+                            'import-preserve-blanks': !!$wire.$get('preserve_blanks'),
                             'send-welcome': !!$wire.$get('send_welcome'),
                             'import-type': $wire.$get('typeOfImport'),
                             // run-backup only makes sense before the first
@@ -1174,6 +1229,15 @@
                     }
 
                     chain.always(function () {
+                        // Release the client-side re-entry guard so the
+                        // Process button becomes clickable again if the
+                        // user needs to retry (e.g. anySliceFailed branch
+                        // below keeps them on the wizard). On success the
+                        // modal hides and the page redirects anyway, so
+                        // the button state is moot in that case.
+                        isProcessingImport = false;
+                        $('#importMappingModal #import').prop('disabled', false).removeAttr('aria-busy');
+
                         $wire.$set('progress', 100);
                         var somethingLanded = aggregatedTally.created > 0 || aggregatedTally.updated > 0;
 

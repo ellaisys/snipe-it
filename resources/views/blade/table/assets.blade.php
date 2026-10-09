@@ -5,6 +5,7 @@
     'fixed_number' => 3,
     'table_header' => trans('general.assets'),
     'status_type' => null,
+    'export_name' => null,
 ])
 
 @aware(['name'])
@@ -25,12 +26,11 @@
         :presenter="\App\Presenters\AssetPresenter::dataTableLayout($status_type !== 'Deleted' ? ['deleted_at'] : [])"
         :$fixed_right_number
         :$fixed_number
-        use_sticky_css
         show_column_search="true"
         show_advanced_search="true"
         buttons="assetButtons"
         api_url="{{ $route }}"
-        export_filename="export-{{ str_slug($name) }}-assets-{{ date('Y-m-d') }}"
+        export_filename="export-{{ $export_name ? str_slug($export_name).'-' : '' }}assets-{{ date('Y-m-d') }}"
     />
 
 @endcan

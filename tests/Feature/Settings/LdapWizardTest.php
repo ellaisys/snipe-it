@@ -274,6 +274,25 @@ class LdapWizardTest extends TestCase
             ->assertHasErrors(['ad_domain']);
     }
 
+    public function test_step1_unchecking_is_ad_clears_ad_domain(): void
+    {
+        // Blade renders the ad_domain input inside @if ($is_ad), so once
+        // the user unchecks the AD toggle the field disappears from the
+        // page. The bound Livewire prop still carries the previously-
+        // typed value though, and would write back to the persisted
+        // Setting on save. Clear on toggle so component state matches
+        // what the user sees.
+        $this->actAsSuperuser();
+        $this->ensureSetting();
+
+        Livewire::test(LdapSettings::class)
+            ->set('is_ad', true)
+            ->set('ad_domain', 'example.com')
+            ->assertSet('ad_domain', 'example.com')
+            ->set('is_ad', false)
+            ->assertSet('ad_domain', '');
+    }
+
     public function test_step1_tls_pair_xor_key_without_cert_blocks_advance(): void
     {
         $this->actAsSuperuser();
@@ -525,6 +544,107 @@ class LdapWizardTest extends TestCase
             ->set('ldap_fname_field', 'givenname')
             ->call('saveAndAdvance')
             ->assertHasErrors(['ldap_username_field']);
+    }
+
+    public function test_step3_persists_blank_optional_mappings_as_null_not_empty_string(): void
+    {
+
+        $this->actAsSuperuser();
+        $this->ensureSetting([
+            'ldap_active_flag' => 'preexisting',
+            'ldap_dept' => 'preexisting',
+            'ldap_email' => 'preexisting',
+        ]);
+
+        Livewire::test(LdapSettings::class)
+            ->set('highestStepReached', 3)
+            ->set('currentStep', 3)
+            ->set('ldap_username_field', 'uid')
+            ->set('ldap_fname_field', 'givenname')
+            ->set('ldap_lname_field', '')
+            ->set('ldap_display_name', '')
+            ->set('ldap_email', '')
+            ->set('ldap_emp_num', '')
+            ->set('ldap_phone_field', '')
+            ->set('ldap_mobile', '')
+            ->set('ldap_jobtitle', '')
+            ->set('ldap_manager', '')
+            ->set('ldap_dept', '')
+            ->set('ldap_address', '')
+            ->set('ldap_city', '')
+            ->set('ldap_state', '')
+            ->set('ldap_zip', '')
+            ->set('ldap_country', '')
+            ->set('ldap_location', '')
+            ->set('ldap_active_flag', '')
+            ->call('saveAndAdvance');
+
+        Setting::$_cache = null;
+        $saved = Setting::getSettings();
+
+        $optionalMappings = [
+            'ldap_lname_field',
+            'ldap_display_name',
+            'ldap_email',
+            'ldap_emp_num',
+            'ldap_phone_field',
+            'ldap_mobile',
+            'ldap_jobtitle',
+            'ldap_manager',
+            'ldap_dept',
+            'ldap_address',
+            'ldap_city',
+            'ldap_state',
+            'ldap_zip',
+            'ldap_country',
+            'ldap_location',
+            'ldap_active_flag',
+        ];
+        foreach ($optionalMappings as $field) {
+            $this->assertNull($saved->{$field}, "Expected blank {$field} to persist as null, got " . var_export($saved->{$field}, true));
+        }
+    }
+
+    public function test_step3_whitespace_only_optional_mapping_persists_as_null(): void
+    {
+        // Defense-in-depth: a user who pastes a stray space / tab into
+        // an optional mapping field should get the same null-stored
+        // result as a user who left it empty.
+        $this->actAsSuperuser();
+        $this->ensureSetting();
+
+        Livewire::test(LdapSettings::class)
+            ->set('highestStepReached', 3)
+            ->set('currentStep', 3)
+            ->set('ldap_username_field', 'uid')
+            ->set('ldap_fname_field', 'givenname')
+            ->set('ldap_active_flag', "   \t  ")
+            ->call('saveAndAdvance');
+
+        Setting::$_cache = null;
+        $this->assertNull(Setting::getSettings()->ldap_active_flag);
+    }
+
+    public function test_step3_populated_optional_mapping_is_preserved(): void
+    {
+        // Baseline for the null-coerce path: a non-blank value trimmed
+        // of surrounding whitespace must survive the save.
+        $this->actAsSuperuser();
+        $this->ensureSetting();
+
+        Livewire::test(LdapSettings::class)
+            ->set('highestStepReached', 3)
+            ->set('currentStep', 3)
+            ->set('ldap_username_field', 'uid')
+            ->set('ldap_fname_field', 'givenname')
+            ->set('ldap_active_flag', 'useraccountcontrol')
+            ->set('ldap_dept', 'department')
+            ->call('saveAndAdvance');
+
+        Setting::$_cache = null;
+        $saved = Setting::getSettings();
+        $this->assertSame('useraccountcontrol', $saved->ldap_active_flag);
+        $this->assertSame('department', $saved->ldap_dept);
     }
 
     // === Step 4 business logic =============================================

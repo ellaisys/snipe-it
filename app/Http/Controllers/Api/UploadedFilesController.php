@@ -74,8 +74,11 @@ class UploadedFilesController extends Controller
         // set. Previously the offset ran on the unfiltered count, which
         // could over-clamp when a search narrowed results.
         $total = $uploads->count();
+        // Secondary sort by id so files uploaded within the same second (a
+        // common case in tests and bulk uploads) return in a stable order
+        // rather than whatever the engine happens to pick.
         $offset = ($request->input('offset') > $total) ? $total : app('api_offset_value');
-        $uploads = $uploads->skip($offset)->take($limit)->orderBy($sort, $order)->get();
+        $uploads = $uploads->skip($offset)->take($limit)->orderBy($sort, $order)->orderBy('id', $order)->get();
 
         return (new UploadedFilesTransformer)->transformFiles($uploads, $total);
     }
@@ -102,11 +105,6 @@ class UploadedFilesController extends Controller
 
         if (! $object) {
             return response()->json(Helper::formatStandardApiResponse('error', null, trans('general.file_upload_status.invalid_object')));
-        }
-
-        // If the file storage directory doesn't exist, create it
-        if (! Storage::exists(parent::getMapStoragePath()[$object_type])) {
-            Storage::makeDirectory(parent::getMapStoragePath()[$object_type], 775);
         }
 
         if ($request->hasFile('file')) {
@@ -217,9 +215,24 @@ class UploadedFilesController extends Controller
             ->first();
 
         if ($log) {
-            // Check the file actually exists, and delete it
+            // Check the file actually exists, and delete it.
+            //
+            // Storage::delete returns false on silent delete failures on
+            // non-throwing filesystem drivers. Ignoring the return let a
+            // failed physical delete produce an "upload deleted" action-log
+            // entry, which HasUploads::uploads uses to exclude the row from
+            // normal listings. Net effect: bytes still on disk, action log
+            // shows the file as deleted, admin sees a success response, and
+            // the file is invisible through the ordinary UI. Refuse to log
+            // the deletion when the physical delete did not succeed.
+            // Reported by Christopher Finks (christopherfi-dev) on
+            // 2026-08-02.
             if (Storage::exists(parent::getMapStoragePath()[$object_type].$log->filename)) {
-                Storage::delete(parent::getMapStoragePath()[$object_type].$log->filename);
+                if (! Storage::delete(parent::getMapStoragePath()[$object_type].$log->filename)) {
+                    \Log::warning('File storage delete failed for '.$log->filename.' on '.parent::getMapObjectType()[$object_type].' id '.$id);
+
+                    return response()->json(Helper::formatStandardApiResponse('error', null, trans_choice('general.file_upload_status.delete.error', 1)), 500);
+                }
             }
             // Delete the record of the file
             if ($log->logUploadDelete($object, $log->filename)) {

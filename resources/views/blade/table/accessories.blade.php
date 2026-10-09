@@ -5,6 +5,7 @@
     'fixed_right_number' => 2,
     'fixed_number' => 2,
     'table_header' => trans('general.accessories'),
+    'export_name' => null,
 ])
 
 @aware(['name'])
@@ -24,12 +25,11 @@
         :$presenter
         :$fixed_right_number
         :$fixed_number
-        use_sticky_css
         show_column_search="true"
         show_advanced_search="true"
         buttons="accessoryButtons"
         api_url="{{ $route }}"
-        export_filename="export-{{ str_slug($name) }}-accessories-{{ date('Y-m-d') }}"
+        export_filename="export-{{ $export_name ? str_slug($export_name).'-' : '' }}accessories-{{ date('Y-m-d') }}"
     />
 
 @endcan

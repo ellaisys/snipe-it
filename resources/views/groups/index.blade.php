@@ -12,14 +12,15 @@
 {{-- Page content --}}
 @section('content')
     <x-container>
-        <x-box>
+        <x-box name="groups" sr_only_title>
+
+            <x-slot:table_header>{{ trans('general.groups') }}</x-slot:table_header>
 
             <x-table
                     name="groups"
                     buttons="groupButtons"
                     fixed_right_number="1"
                     fixed_number="1"
-                    use_sticky_css
                     api_url="{{ route('api.groups.index') }}"
                     :presenter="\App\Presenters\GroupPresenter::dataTableLayout()"
                     export_filename="export-groups-{{ date('Y-m-d') }}"

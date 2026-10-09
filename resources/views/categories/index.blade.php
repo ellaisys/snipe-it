@@ -10,7 +10,9 @@
 {{-- Page content --}}
 @section('content')
     <x-container>
-        <x-box>
+        <x-box name="category" sr_only_title>
+
+            <x-slot:table_header>{{ trans('general.categories') }}</x-slot:table_header>
 
             <x-slot:bulkactions>
                 <x-table.bulk-categories />
@@ -21,14 +23,15 @@
                     buttons="categoryButtons"
                     fixed_right_number="1"
                     fixed_number="1"
-                    use_sticky_css
                     show_advanced_search="true"
                     api_url="{{ route('api.categories.index') }}"
                     :presenter="\App\Presenters\CategoryPresenter::dataTableLayout()"
                     export_filename="export-categories-{{ date('Y-m-d') }}"
             />
         </x-box>
+        <x-shiftclick/>
     </x-container>
+
 @stop
 
 @section('moar_scripts')

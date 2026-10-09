@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\FileStorage;
 use App\Events\CheckoutableCheckedIn;
 use App\Helpers\Helper;
 use App\Http\Controllers\Controller;
@@ -137,6 +138,13 @@ class AssetsController extends Controller
             'assigned_to',
             'created_by',
 
+            // Sync-adapter side-table columns (asset_external_sources).
+            'primary_mac',
+            'primary_ip',
+            'external_os',
+            'external_os_version',
+            'last_seen',
+
         ];
 
         $all_custom_fields = CustomField::all(); // used as a 'cache' of custom fields throughout this page load
@@ -168,7 +176,8 @@ class AssetsController extends Controller
                 'model.manufacturer',
                 'model.fieldset',
                 'model.depreciation',
-                'supplier'
+                'supplier',
+                'externalSource',
             ); // it might be tempting to add 'assetlog' here, but don't. It blows up update-heavy users.
 
         if ($filter_non_deprecable_assets) {
@@ -213,6 +222,10 @@ class AssetsController extends Controller
                         break;
                 }
                 break;
+        }
+
+        if ($request->boolean('past_eol')) {
+            $assets->PastEol();
         }
 
         /**
@@ -387,11 +400,16 @@ class AssetsController extends Controller
         // This is kinda gross, but we need to do this because the Bootstrap Tables
         // API passes custom field ordering as custom_fields.fieldname, and we have to strip
         // that out to let the default sorter below order them correctly on the assets table.
-        $sort_override = str_replace('custom_fields.', '', $request->input('sort'));
+        // Cast to string so a missing sort param (null from input()) doesn't hit the PHP 8+
+        // deprecation on str_replace, and so downstream comparisons are always string vs string.
+        $sort_override = str_replace('custom_fields.', '', (string) $request->input('sort'));
 
-        // This handles all of the pivot sorting (versus the assets.* fields
-        // in the allowed_columns array)
-        $column_sort = in_array($sort_override, $allowed_columns) ? $sort_override : 'assets.created_at';
+        // Strict in_array is deliberate: a loose match would let an empty $sort_override
+        // (no sort param sent) equal any null value in $allowed_columns and produce an
+        // empty ORDER BY column downstream.
+        $column_sort = ($sort_override !== '' && in_array($sort_override, $allowed_columns, true))
+            ? $sort_override
+            : 'assets.created_at';
 
         $order = $request->input('order') === 'asc' ? 'asc' : 'desc';
 
@@ -413,6 +431,7 @@ class AssetsController extends Controller
                 break;
             case 'location':
                 $assets->OrderLocation($order);
+                break;
             case 'rtd_location':
                 $assets->OrderRtdLocation($order);
                 break;
@@ -434,6 +453,22 @@ class AssetsController extends Controller
             case 'eol':
                 $assets->orderBy('assets.asset_eol_date', $order);
                 break;
+                // Sync-adapter side-table sorts.
+            case 'primary_mac':
+                $assets->OrderExternalSource($order, 'primary_mac');
+                break;
+            case 'primary_ip':
+                $assets->OrderExternalSource($order, 'primary_ip');
+                break;
+            case 'external_os':
+                $assets->OrderExternalSource($order, 'os');
+                break;
+            case 'external_os_version':
+                $assets->OrderExternalSource($order, 'os_version');
+                break;
+            case 'last_seen':
+                $assets->OrderExternalSource($order, 'last_seen');
+                break;
             default:
                 $numeric_sort = false;
 
@@ -452,10 +487,11 @@ class AssetsController extends Controller
                     if ($numeric_sort) {
                         $assets->orderByRaw(DB::getTablePrefix().'assets.'.$sort_override.' * 1 '.$order);
                     } else {
-                        $assets->orderBy($sort_override, $order);
+                        $assets->orderBy('assets.'.$sort_override, $order);
                     }
                 } else {
-                    $assets->orderBy($column_sort, $order);
+                    $qualifiedSort = str_contains($column_sort, '.') ? $column_sort : 'assets.'.$column_sort;
+                    $assets->orderBy($qualifiedSort, $order);
                 }
                 break;
         }
@@ -465,7 +501,27 @@ class AssetsController extends Controller
         $offset = ($request->input('offset') > $total) ? $total : app('api_offset_value');
         $limit = app('api_limit_value');
 
-        $assets = $assets->skip($offset)->take($limit)->get();
+        // Deferred-join pagination. Instead of running the full query
+        // with all its joins and eager loads through OFFSET / LIMIT
+        // (which forces MySQL to pull entire row bodies for the
+        // (offset + limit) rows it walks before returning the last
+        // `limit` of them), pluck only the primary-key ids on the
+        // fully-joined + sorted + filtered query, then re-hydrate the
+        // limited set of ids with their eager loads on a separate query.
+        $ids = (clone $assets)->select('assets.id')->skip($offset)->take($limit)->pluck('id')->all();
+
+        if (empty($ids)) {
+            $assets = Asset::query()->whereRaw('1 = 0')->get();
+        } else {
+            $order = array_flip($ids);
+            $assets = Asset::query()
+                ->withTrashed()
+                ->whereIn('assets.id', $ids)
+                ->setEagerLoads($assets->getEagerLoads())
+                ->get()
+                ->sortBy(fn ($model) => $order[$model->getKey()] ?? PHP_INT_MAX)
+                ->values();
+        }
 
         /**
          * Include additional associated relationships
@@ -654,6 +710,20 @@ class AssetsController extends Controller
             $assets->where('assets.id', '!=', (int) $request->input('excludeId'));
         }
 
+        // Pre-scope the picker to a specific user's assigned assets.
+        // Used by the components-checkout screen when reached via a
+        // /requests row: an admin fulfilling a component request wants
+        // to install the part into one of the requester's existing
+        // assets, not hunt across the whole fleet. Empty result is the
+        // honest answer here - if the requester has nothing assigned,
+        // there's no valid install target and the admin should see
+        // that instead of a fallback to the full fleet.
+        if ($request->filled('assignedTo')) {
+            $assignedUserId = (int) $request->input('assignedTo');
+            $assets->where('assets.assigned_to', $assignedUserId)
+                ->where('assets.assigned_type', User::class);
+        }
+
         if ($request->filled('statusType') && $request->input('statusType') === 'RTD') {
             $assets = $assets->RTD();
         }
@@ -763,6 +833,20 @@ class AssetsController extends Controller
             return response()->json(Helper::formatStandardApiResponse('error', null, trans('admin/hardware/message.does_not_exist')));
         }
 
+        // The create payload may include assigned_user / assigned_asset /
+        // assigned_location and normally triggers a real checkOut() alongside
+        // the create. A role with only assets.create (and an explicit deny on
+        // assets.checkout) would otherwise land a checkout event on the
+        // newly-fabricated asset, bypassing the checkout permission entirely.
+        // Rather than reject the whole request, drop the checkout side of the
+        // operation and keep the create. The response message flags the skipped checkout so they
+        // can detect the partial success.
+        $checkoutSkippedForPermission = $requestedCheckout && ! Gate::allows('checkout', $asset);
+        if ($checkoutSkippedForPermission) {
+            $requestedCheckout = false;
+            $target = null;
+        }
+
         if ($requestedCheckout) {
             $companyMismatchResponse = $this->checkoutCompanyMismatchResponse($asset, $target);
             if ($companyMismatchResponse) {
@@ -789,7 +873,11 @@ class AssetsController extends Controller
                 $asset->image = $asset->getImageUrl();
             }
 
-            return response()->json(Helper::formatStandardApiResponse('success', $asset, trans('admin/hardware/message.create.success')));
+            $message = $checkoutSkippedForPermission
+                ? trans('admin/hardware/message.create.success_no_checkout')
+                : trans('admin/hardware/message.create.success');
+
+            return response()->json(Helper::formatStandardApiResponse('success', $asset, $message));
 
             // below is what we want the _eventual_ return to look like - in a more standardized format.
             // return response()->json(Helper::formatStandardApiResponse('success', (new AssetsTransformer)->transformAsset($asset), trans('admin/hardware/message.create.success')));
@@ -1081,6 +1169,19 @@ class AssetsController extends Controller
             }
 
             if ($requestedCheckout) {
+                // Concurrency guard, same shape as Api\AssetsController::checkout.
+                // availableForCheckout() at line 1067 ran outside the transaction;
+                // without a row lock, two racing PATCH requests that both include
+                // assigned_user / assigned_asset / assigned_location could each
+                // pass that check and both proceed through checkOut(), producing
+                // duplicate checkout-history rows and a doubled checkout_counter.
+                // Re-fetch the row under lockForUpdate and re-check availability
+                // against the locked snapshot before invoking checkOut.
+                $locked = Asset::whereKey($asset->id)->lockForUpdate()->first();
+                if (! $locked || ! $locked->availableForCheckout()) {
+                    return false;
+                }
+
                 // Preserve the asset name if the name wasn't in the payload.
                 $asset_name = $request->has('name') ? $request->input('name') : $asset->name;
 
@@ -1342,8 +1443,23 @@ class AssetsController extends Controller
         //            $asset->location_id = $target->rtd_location_id;
         //        }
 
-        // Keep checkout mutation + checkout logging/event side effects atomic.
+        // Concurrency guard. availableForCheckout() above ran on an
+        // unlocked read, so two simultaneous checkout requests can both
+        // observe the asset as available and both proceed through
+        // checkOut(), producing duplicate checkout-history rows and
+        // double-incrementing checkout_counter on a single-assignment
+        // asset. Re-fetch the row under lockForUpdate INSIDE the
+        // transaction and re-check availability against the locked
+        // snapshot. Any concurrent checkout blocks on the row lock until
+        // this transaction commits, then sees the asset as no longer
+        // available. Mirrors the pattern in ConsumablesController::store
+        // (GHSA-x4g2-87xc-m5jm).
         $wasCheckedOut = DB::transaction(function () use ($asset, $target, $checkout_at, $expected_checkin, $note, $asset_name): bool {
+            $locked = Asset::whereKey($asset->id)->lockForUpdate()->first();
+            if (! $locked || ! $locked->availableForCheckout()) {
+                return false;
+            }
+
             return $asset->checkOut($target, auth()->user(), $checkout_at, $expected_checkin, $note, $asset_name, $asset->location_id);
         });
 
@@ -1593,7 +1709,7 @@ class AssetsController extends Controller
             $asset = $assets->get($id);
 
             // Per-row FMCS/authorization gate. The class-level authorize()
-            // above is only a coarse "you have assets.audit" check; this
+            // above is only a coarse "you have assets.audit" check. This
             // catches FMCS mismatches and any policy tightening that lands
             // later, surfacing them as row errors rather than a whole 403.
             if (! Gate::allows('audit', $asset)) {
@@ -1690,7 +1806,7 @@ class AssetsController extends Controller
 
                 if ($field->field_encrypted == '1') {
                     // Only writers with the encrypted-view permission can
-                    // set encrypted fields; other callers get the payload
+                    // set encrypted fields. Other callers get the payload
                     // echo but no persisted change.
                     if (Gate::allows('assets.view.encrypted_custom_fields')) {
                         $asset->{$field->db_column} = Crypt::encrypt($stored);
@@ -1732,8 +1848,9 @@ class AssetsController extends Controller
             // the web audit form's behavior. Filename is stored on the
             // action log so it renders in the audit history.
             $file_name = null;
-            if ($request->hasFile('image')) {
-                $file_name = $request->handleFile('private_uploads/audits/', 'audit-'.$asset->id, $request->file('image'));
+            // Legacy `image` posts are aliased to `file[0]` in UploadFileRequest::prepareForValidation.
+            if ($request->hasFile('file.0')) {
+                $file_name = $request->handleFile(FileStorage::Audits->privateStorageKey(), 'audit-'.$asset->id, $request->file('file.0'));
                 $payload['image'] = $file_name;
             }
 
@@ -1878,11 +1995,14 @@ class AssetsController extends Controller
         }
 
         $order = $request->input('order') === 'asc' ? 'asc' : 'desc';
-        $sort_override = str_replace('custom_fields.', '', $request->input('sort'));
+        $sort_override = str_replace('custom_fields.', '', (string) $request->input('sort'));
 
         // This handles all the pivot sorting (versus the assets.* fields
-        // in the allowed_columns array)
-        $column_sort = in_array($sort_override, $allowed_columns) ? $sort_override : 'assets.created_at';
+        // in the allowed_columns array). Strict in_array + non-empty gate so a missing
+        // sort param can't loose-match a null in $allowed_columns and produce ORDER BY ''.
+        $column_sort = ($sort_override !== '' && in_array($sort_override, $allowed_columns, true))
+            ? $sort_override
+            : 'assets.created_at';
 
         switch ($request->input('sort')) {
             case 'model':
@@ -1899,7 +2019,7 @@ class AssetsController extends Controller
                 break;
         }
 
-        $assets->requestableAssets();
+        $assets->requestable();
 
         // Make sure the offset and limit are actually integers and do not exceed system limits
         $total = $assets->count();
@@ -1958,8 +2078,10 @@ class AssetsController extends Controller
 
         $component_checkouts = ComponentAssignment::where('asset_id', $asset->id)->with('adminuser')->with('component');
 
-        $sort_override = $request->input('sort');
-        $column_sort = in_array($sort_override, $allowed_columns) ? $sort_override : 'created_at';
+        $sort_override = (string) $request->input('sort');
+        $column_sort = ($sort_override !== '' && in_array($sort_override, $allowed_columns, true))
+            ? $sort_override
+            : 'created_at';
         $order = $request->input('order') === 'asc' ? 'asc' : 'desc';
 
         switch ($sort_override) {

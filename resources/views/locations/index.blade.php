@@ -9,14 +9,15 @@
 
 @section('content')
     <x-container>
-        <x-box name="locations">
+        <x-box name="locations" sr_only_title>
             {{-- Convert hand-rolled <table> to the shared x-table.locations
                  component so sticky-column CSS (snipe-table--sticky-right-1)
-                 and use_sticky_css are wired the same way as every other
-                 list page. Preserves the company_id / status query-string
-                 filtering the index has always supported. --}}
+                 is wired the same way as every other list page. Preserves
+                 the company_id / status query-string filtering the index
+                 has always supported. --}}
             <x-table.locations :route="route('api.locations.index', ['company_id' => e(request('company_id')), 'status' => e(request('status'))])" />
         </x-box>
+        <x-shiftclick/>
     </x-container>
 @stop
 

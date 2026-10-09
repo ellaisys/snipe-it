@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Actions\Suppliers\DestroySupplierAction;
+use App\Enums\FileStorage;
+use App\Exceptions\Handler;
 use App\Exceptions\ItemStillHasAccessories;
 use App\Exceptions\ItemStillHasAssets;
 use App\Exceptions\ItemStillHasComponents;
@@ -235,8 +237,8 @@ class SuppliersController extends Controller
             return response()->json(Helper::formatStandardApiResponse('error', null, trans('general.bulk_delete_associations.assoc_components', [
                 'components_count' => (int) $supplier->components_count, 'item' => trans('general.supplier'),
             ])));
-        } catch (\Exception $e) {
-            report($e);
+        } catch (\Throwable $e) {
+            Handler::reportOrRethrow($e);
 
             return response()->json(Helper::formatStandardApiResponse('error', null, trans('general.something_went_wrong')));
         }
@@ -275,7 +277,7 @@ class SuppliersController extends Controller
         // they may not have a ->name value but we want to display something anyway
         foreach ($suppliers as $supplier) {
             $supplier->use_text = $supplier->name;
-            $supplier->use_image = ($supplier->image) ? Storage::disk('public')->url('suppliers/'.$supplier->image, $supplier->image) : null;
+            $supplier->use_image = ($supplier->image) ? Storage::disk('public')->url(FileStorage::Suppliers->publicPath().$supplier->image, $supplier->image) : null;
         }
 
         return (new SelectlistTransformer)->transformSelectlist($suppliers);

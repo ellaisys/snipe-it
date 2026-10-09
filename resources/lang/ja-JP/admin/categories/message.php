@@ -21,8 +21,15 @@ return [
         'confirm' => 'このカテゴリーを本当に削除しますか？',
         'error' => 'このカテゴリーを削除する際に問題がおきました。再度実行してください。',
         'success' => 'Category was deleted successfully.',
-        'bulk_success' => 'Categories were deleted successfully.',
+        'bulk_success' => 'Category deleted successfully.|:count categories were deleted successfully.',
         'partial_success' => 'Category deleted successfully. See additional information below. | :count categories were deleted successfully. See additional information below.',
+    ],
+
+    'bulkedit' => [
+        'warn' => 'You are about to edit the properties of the following category:|You are about to edit the properties of the following :count categories:',
+        'no_selection' => 'You must select at least one category to edit.',
+        'no_changes' => 'フィールドが選択されていないため、更新されませんでした。',
+        'success' => 'Category successfully updated.|:count categories successfully updated.',
     ],
 
 ];

@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Actions\Categories\DestroyCategoryAction;
+use App\Enums\FileStorage;
+use App\Exceptions\Handler;
 use App\Exceptions\ItemStillHasChildren;
 use App\Helpers\Helper;
 use App\Http\Controllers\Controller;
@@ -240,8 +242,8 @@ class CategoriesController extends Controller
             return response()->json(
                 Helper::formatStandardApiResponse('error', null, trans('general.bulk_delete_associations.general_assoc_warning', ['asset_type' => $category->category_type]))
             );
-        } catch (\Exception $e) {
-            report($e);
+        } catch (\Throwable $e) {
+            Handler::reportOrRethrow($e);
 
             return response()->json(
                 Helper::formatStandardApiResponse('error', null, trans('general.something_went_wrong'))
@@ -278,7 +280,7 @@ class CategoriesController extends Controller
         // This lets us have more flexibility in special cases like assets, where
         // they may not have a ->name value but we want to display something anyway
         foreach ($categories as $category) {
-            $category->use_image = ($category->image) ? Storage::disk('public')->url('categories/'.$category->image, $category->image) : null;
+            $category->use_image = ($category->image) ? Storage::disk('public')->url(FileStorage::Categories->publicPath().$category->image, $category->image) : null;
         }
 
         return (new SelectlistTransformer)->transformSelectlist($categories);

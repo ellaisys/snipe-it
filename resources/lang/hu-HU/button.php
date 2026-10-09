@@ -3,6 +3,7 @@
 return [
     'actions' => 'Műveletek',
     'add' => 'Új hozzáadása',
+    'back' => 'Vissza',
     'cancel' => 'Vissza',
     'checkin_and_delete' => 'Összes visszavétele és a felhasználó törlése',
     'delete' => 'Törlés',
@@ -22,7 +23,7 @@ return [
     'add_maintenance' => 'Karbantartás hozzáadása',
     'append' => 'Hozzáillesztés',
     'new' => 'Új',
-    'show_hide_info' => 'Show/Hide More Information',
+    'show_hide_info' => 'További információk mutatása/elrejtése',
     'var' => [
         'clone' => 'Klón :item_type',
         'edit' => ':item_type szerkesztése',

@@ -11,7 +11,9 @@
     <x-container columns="2">
 
         <x-page-column class="col-md-9">
-            <x-box>
+            <x-box name="statuslabel" sr_only_title>
+
+                <x-slot:table_header>{{ trans('admin/statuslabels/table.title') }}</x-slot:table_header>
 
                 <x-slot:bulkactions>
                     <x-table.bulk-statuslabels />
@@ -22,13 +24,13 @@
                     buttons="statuslabelButtons"
                     fixed_right_number="1"
                     fixed_number="1"
-                    use_sticky_css
                     api_url="{{ route('api.statuslabels.index') }}"
                     :presenter="\App\Presenters\StatusLabelPresenter::dataTableLayout()"
                     export_filename="export-statuslabels-{{ date('Y-m-d') }}"
                 />
 
             </x-box>
+            <x-shiftclick/>
         </x-page-column>
         <x-page-column class="col-md-3">
 

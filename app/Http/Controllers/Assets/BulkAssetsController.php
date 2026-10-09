@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Assets;
 
+use App\Enums\FileStorage;
 use App\Events\CheckoutableCheckedIn;
 use App\Events\CheckoutablesCheckedOutInBulk;
 use App\Helpers\Helper;
@@ -266,7 +267,7 @@ class BulkAssetsController extends Controller
         // is Referer-derived and would need its own sanitize step.
         $bulk_back_url = Helper::sameOriginUrl($request->session()->pull('bulk_back_url')) ?? route('hardware.index');
 
-        $custom_field_columns = CustomField::all()->pluck('db_column')->toArray();
+        $custom_field_columns = CustomField::pluck('db_column')->toArray();
 
         // find custom field input attributes that start with 'null_'
         $null_custom_fields_inputs = array_filter($request->all(), function ($key) {
@@ -292,12 +293,16 @@ class BulkAssetsController extends Controller
          * make sense (for example, changing the status ID to something incompatible with
          * its checkout status.
          */
+        // purchase_cost and order_number bulk edits are allowed but
+        // carry a caveat: assets have no per-row currency column, so
+        // if the selection contains assets whose original orders were
+        // in different currencies, the value written here reads as
+        // the system default for every row. Callers are expected to
+        // narrow the selection to a single currency first. See #19564.
         if (($request->filled('name'))
             || ($request->filled('purchase_date'))
             || ($request->filled('expected_checkin'))
-            || ($request->filled('purchase_cost'))
             || ($request->filled('supplier_id'))
-            || ($request->filled('order_number'))
             || ($request->filled('warranty_months'))
             || ($request->filled('rtd_location_id'))
             || ($request->filled('requestable'))
@@ -307,6 +312,8 @@ class BulkAssetsController extends Controller
             || ($request->filled('notes'))
             || ($request->filled('next_audit_date'))
             || ($request->filled('asset_eol_date'))
+            || ($request->filled('order_number'))
+            || ($request->filled('purchase_cost'))
             || ($request->filled('null_name'))
             || ($request->filled('null_purchase_date'))
             || ($request->filled('null_expected_checkin_date'))
@@ -332,7 +339,6 @@ class BulkAssetsController extends Controller
                 $this->conditionallyAddItem('name')
                     ->conditionallyAddItem('purchase_date')
                     ->conditionallyAddItem('expected_checkin')
-                    ->conditionallyAddItem('order_number')
                     ->conditionallyAddItem('requestable')
                     ->conditionallyAddItem('supplier_id')
                     ->conditionallyAddItem('warranty_months')
@@ -401,6 +407,10 @@ class BulkAssetsController extends Controller
 
                 if ($request->filled('purchase_cost')) {
                     $this->update_array['purchase_cost'] = $request->input('purchase_cost');
+                }
+
+                if ($request->filled('order_number')) {
+                    $this->update_array['order_number'] = $request->input('order_number');
                 }
 
                 if ($request->filled('company_id')) {
@@ -768,6 +778,27 @@ class BulkAssetsController extends Controller
                     // request, so the operator's explicit choice sticks.
                     $asset->requestable = $request->boolean('requestable');
 
+                    // Concurrency guard, same shape as Api\AssetsController::checkout.
+                    // Bulk checkout iterates over a selection of asset IDs and
+                    // calls checkOut per asset without a per-row lock; two
+                    // operators submitting overlapping bulk selections at the
+                    // same instant could each pass the caller-side selection
+                    // and both proceed through checkOut on the same asset,
+                    // landing duplicate history rows and doubling
+                    // checkout_counter for that asset. Re-fetch the row under
+                    // lockForUpdate and re-check availability before invoking
+                    // checkOut. Assets that racing bulk actions have already
+                    // claimed are skipped and surfaced as errors, matching how
+                    // the per-asset checkout path behaves.
+                    $locked = Asset::whereKey($asset->id)->lockForUpdate()->first();
+                    if (! $locked || ! $locked->availableForCheckout()) {
+                        $errors = array_merge_recursive($errors, [
+                            'asset_'.$asset->id => [trans('admin/hardware/message.checkout.not_available')],
+                        ]);
+
+                        continue;
+                    }
+
                     $checkout_success = $asset->checkOut($target, $admin, $checkout_at, $expected_checkin, e($request->input('note')), $asset->name, null);
 
                     // TODO - I think this logic is duplicated in the checkOut method?
@@ -940,7 +971,7 @@ class BulkAssetsController extends Controller
         });
 
         if (! $errors) {
-            return redirect()->intended(route('hardware.index'))->with('success', trans_choice('admin/hardware/message.multi-checkin.success', count($asset_ids)));
+            return Helper::safeIntended(route('hardware.index'))->with('success', trans_choice('admin/hardware/message.multi-checkin.success', count($asset_ids)));
         }
 
         return redirect()->route('hardware.bulkcheckin.show')->withInput()
@@ -1137,8 +1168,8 @@ class BulkAssetsController extends Controller
         }
 
         $file_name = null;
-        if ($request->hasFile('image')) {
-            $file_name = $request->handleFile('private_uploads/audits/', 'audit-'.$asset->id, $request->file('image'));
+        if ($request->hasFile('file.0')) {
+            $file_name = $request->handleFile(FileStorage::Audits->privateStorageKey(), 'audit-'.$asset->id, $request->file('file.0'));
         }
 
         $asset->logAudit(

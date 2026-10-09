@@ -9,7 +9,9 @@
 {{-- Page content --}}
 @section('content')
     <x-container>
-        <x-box name="department">
+        <x-box name="department" sr_only_title>
+
+            <x-slot:table_header>{{ trans('general.departments') }}</x-slot:table_header>
 
             <x-slot:bulkactions>
                 <x-table.bulk-departments />
@@ -21,7 +23,6 @@
                     buttons="departmentButtons"
                     fixed_right_number="1"
                     fixed_number="1"
-                    use_sticky_css
                     api_url="{{ route('api.departments.index') }}"
                     :presenter="\App\Presenters\DepartmentPresenter::dataTableLayout()"
                     export_filename="export-departments-{{ date('Y-m-d') }}"

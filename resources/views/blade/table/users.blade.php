@@ -7,6 +7,8 @@
     'table_header' => trans('general.users'),
 ])
 
+@aware(['name'])
+
 <!-- start assets tab pane -->
 @can('view', \App\Models\User::class)
     <x-slot:table_header>
@@ -21,7 +23,6 @@
         :$presenter
         :$fixed_right_number
         :$fixed_number
-        use_sticky_css
         show_column_search="true"
         show_advanced_search="true"
         buttons="userButtons"

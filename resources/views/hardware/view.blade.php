@@ -195,6 +195,41 @@
                                     @endforeach
                                 @endif
 
+                                {{-- Sync-adapter-populated network / OS
+                                     inventory. Only renders per-field
+                                     when a value exists so assets that
+                                     never got synced (or that skipped
+                                     these mappings) don't show empty
+                                     rows. --}}
+                                @if ($asset->externalSource)
+                                    @if ($asset->externalSource->primary_mac)
+                                        <x-data-row :label="trans('admin/settings/sync_adapters.field_mac')" copy_what="external_mac">
+                                            {{ $asset->externalSource->primary_mac }}
+                                        </x-data-row>
+                                    @endif
+                                    @if ($asset->externalSource->primary_ip)
+                                        <x-data-row :label="trans('admin/settings/sync_adapters.field_ip')" copy_what="external_ip">
+                                            {{ $asset->externalSource->primary_ip }}
+                                        </x-data-row>
+                                    @endif
+                                    @if ($asset->externalSource->os)
+                                        <x-data-row :label="trans('admin/settings/sync_adapters.field_os')" copy_what="external_os">
+                                            {{ $asset->externalSource->os }}
+                                        </x-data-row>
+                                    @endif
+                                    @if ($asset->externalSource->os_version)
+                                        <x-data-row :label="trans('admin/settings/sync_adapters.field_os_version')" copy_what="external_os_version">
+                                            {{ $asset->externalSource->os_version }}
+                                        </x-data-row>
+                                    @endif
+                                    @if ($asset->externalSource->last_seen)
+                                        <x-data-row :label="trans('admin/settings/sync_adapters.field_last_seen')" copy_what="external_last_seen">
+                                            {{ $asset->externalSource->last_seen->diffForHumans() }}
+                                            <span class="text-muted">({{ Helper::getFormattedDateObject($asset->externalSource->last_seen, 'datetime', false) }})</span>
+                                        </x-data-row>
+                                    @endif
+                                @endif
+
 
 
                                 {{-- journal() chains off assetlog() which orders created_at DESC,
@@ -400,7 +435,7 @@
                             :table_header="trans('general.audits')"
                             :model="$asset"
                             :route="route('api.activity.index', ['item_id' => $asset->id, 'item_type' => 'asset', 'action_type' => 'audit'])"
-                            :hide_fields="['id','action_type', 'item', 'changed', 'target','quantity','changed','serial','signature_file','log_meta']"
+                            :hide_fields="['id','action_type', 'item', 'changed', 'target','quantity','changed','serial','signature_file','log_meta','order_number']"
                             :extra_columns="$audit_custom_field_columns"
                         />
                     </x-tabs.pane>
@@ -411,7 +446,7 @@
                         <x-table.history
                             :table_header="trans('general.notes')"
                             :model="$asset" :route="route('api.activity.index', ['item_id' => $asset->id, 'item_type' => 'asset', 'action_type' => 'note added'])"
-                            :hide_fields="['id','action_type', 'item', 'changed', 'target','file','file_download','quantity','changed','serial','signature_file','log_meta']"
+                            :hide_fields="['id','action_type', 'item', 'changed', 'target','file','file_download','quantity','changed','serial','signature_file','log_meta','order_number']"
                         />
                     </x-tabs.pane>
                     <!-- end audits tab pane -->
@@ -430,6 +465,7 @@
                         <x-table.history
                             :model="$asset"
                             :route="route('api.assets.history', $asset)"
+                            :hide_fields="['order_number']"
                         />
                     </x-tabs.pane>
                     <!-- end history tab pane -->
@@ -472,10 +508,10 @@
 
     @section('moar_scripts')
         @can('files', $asset)
-            @include ('modals.upload-file', ['item_type' => 'asset', 'item_id' => $asset->id])
+            <x-modals.upload-file item-type="asset" :item-id="$asset->id" />
         @endcan
         @can('update', $asset)
-        @include ('modals.add-note', ['type' => 'asset', 'id' => $asset->id])
+        <x-modals.add-note type="asset" :id="$asset->id" />
     @endcan
         @include ('partials.bootstrap-table')
         <x-modals.maintenance-complete />

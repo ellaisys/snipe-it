@@ -212,9 +212,6 @@
 
         <div class="box-body">
 
-            <span id="wizard-locked-note" class="sr-only">
-                {{ trans('admin/settings/general.ldap_wizard.locked_help') }}
-            </span>
 
             {{-- Step title + help text, always the current step's copy. --}}
             @php
@@ -230,10 +227,22 @@
                 <x-form.legend for="{{ $currentStep }}" help_text="{!! trans($stepHelpKey) !!}" />
             @endif
 
+            @if ($isReadOnly)
+                <x-alert type="warning" role="status" icon="warning">
+                    This is a demo. Every LDAP config field is read-only, but you can still <strong><a href="?step=3">enter
+                            a sample username</a></strong> on step 3 and use the Test Find User button to see the wizard
+                    search against the pre-seeded readonly directory. (You can search on tesla, einstein, or curie.)
+                    The wizard will not actually save any LDAP settings in this demo.
+                </x-alert>
+
+            @endif
+
             {{-- Wizard progress indicator. Same .bs-wizard class the
                  quickstart setup layout + importer modal use. Flex + flex:1 on
                  children rather than bootstrap col-md-*, so the layout
                  stays uniform regardless of step count. --}}
+
+
             <div class="bs-wizard" style="border-bottom:0; margin-bottom: 25px; display: flex;" role="group" aria-label="{{ trans('admin/settings/general.ldap_wizard.progress_label') }}">
                 @foreach ($this->stepTitles as $stepNum => $stepTitle)
                     @php
@@ -288,7 +297,20 @@
                         <div class="progress" aria-hidden="true">
                             <div class="progress-bar"></div>
                         </div>
-                        <span class="bs-wizard-dot" aria-hidden="true"></span>
+                        {{-- The circular indicator on the progress line
+                             is now itself a click target (matching the
+                             text-based click target above)  --}}
+                        <button
+                            type="button"
+                            wire:click="goToStep({{ $stepNum }})"
+                            @if ($dirty && $stepNum !== $currentStep && $reachable)
+                                wire:confirm="{{ trans('admin/settings/general.ldap_wizard.confirm_discard') }}"
+                            @endif
+                            @disabled(! $reachable)
+                            tabindex="-1"
+                            aria-hidden="true"
+                            class="bs-wizard-dot"
+                            style="padding: 0; border: 0;"></button>
                     </div>
                 @endforeach
             </div>
@@ -323,11 +345,12 @@
             >
                 {{-- Panel-top alert is for INFRASTRUCTURE feedback
                      (connect failures, TLS handshake, bind rejection).
-                     Step 3's lookup-success alert renders inside the
-                     well next to the search box instead, since it's
-                     scoped to what the user just searched. The check
-                     below suppresses it here for that case. --}}
-                @if ($testStatus && ! ($currentStep === 3 && $testStatus === 'success'))
+                     Step 3's test-lookup alerts (success AND error)
+                     render inside the well next to the search box
+                     instead, so the response appears where the user
+                     clicked. The check below suppresses this location
+                     for that case. --}}
+                @if ($testStatus && $currentStep !== 3)
                     <x-alert
                         :type="$testStatus === 'success' ? 'success' : 'danger'"
                         :role="$testStatus === 'success' ? 'status' : 'alert'"
@@ -344,6 +367,7 @@
                         wire:model.live="is_ad"
                         :label="trans('admin/settings/general.ad')"
                         :checked="$is_ad"
+                        :disabled="$isReadOnly"
                     />
 
                     <!-- AD Domain (only when is_ad is checked) -->
@@ -359,6 +383,7 @@
                                     wire:model="ad_domain"
                                     placeholder="{{ trans('general.example').'example.com' }}"
                                     :required="true"
+                                    :readonly="$isReadOnly"
                                 />
                             </x-slot:input>
                         </x-form.row>
@@ -376,6 +401,7 @@
                                 wire:model.live.debounce.500ms="ldap_server"
                                 placeholder="{{ trans('general.example').'ldap://ldap.example.com' }}"
                                 :required="true"
+                                :readonly="$isReadOnly"
                             />
                         </x-slot:input>
                     </x-form.row>
@@ -387,6 +413,7 @@
                         :label="trans('admin/settings/general.ldap_tls')"
                         :checked="$ldap_tls"
                         help_text="{!! trans('admin/settings/general.ldap_tls_help') !!}"
+                        :disabled="$isReadOnly"
                     />
 
                     <!-- Ignore LDAP certificate -->
@@ -396,12 +423,14 @@
                         :label="trans('admin/settings/general.ldap_server_cert_ignore')"
                         :checked="$ldap_server_cert_ignore"
                         help_text="{!! trans('admin/settings/general.ldap_server_cert_help') !!}"
+                        :disabled="$isReadOnly"
                     />
 
                     <!-- Client TLS key -->
                     <x-form.row
                         name="ldap_client_tls_key"
                         :label="trans('admin/settings/general.ldap_client_tls_key')"
+                        help_class="col-md-7 col-md-offset-3"
                     >
                         <x-slot:input>
                             <x-input.textarea
@@ -410,6 +439,7 @@
                                 rows="4"
                                 :placeholder="sprintf('%s-----BEGIN RSA PRIVATE KEY-----%s1234567890%s-----END RSA PRIVATE KEY-----', trans('general.example'), PHP_EOL, PHP_EOL)"
                                 :required="$ldap_client_tls_cert !== ''"
+                                :readonly="$isReadOnly"
                             />
                         </x-slot:input>
                     </x-form.row>
@@ -419,6 +449,7 @@
                         name="ldap_client_tls_cert"
                         :label="trans('admin/settings/general.ldap_client_tls_cert')"
                         help_text="{!! trans('admin/settings/general.ldap_client_tls_cert_help') !!}"
+                        help_class="col-md-7 col-md-offset-3"
                     >
                         <x-slot:input>
                             <x-input.textarea
@@ -427,6 +458,7 @@
                                 rows="4"
                                 :placeholder="sprintf('%s-----BEGIN CERTIFICATE-----%s1234567890%s-----END CERTIFICATE-----', trans('general.example'), PHP_EOL, PHP_EOL)"
                                 :required="$ldap_client_tls_key !== ''"
+                                :readonly="$isReadOnly"
                             />
                         </x-slot:input>
                     </x-form.row>
@@ -438,12 +470,28 @@
                          alongside. That was the friction that pushed us
                          to combine what used to be two separate steps. --}}
 
+                    {{-- Only renders when a client cert AND key are populated on step 1.
+                        When runtime lacks SASL support (via ldap_sasl_bind) the hint would actively
+                        mislead admins into leaving bind fields blank for an auth path that can't execute. --}}
+                    @if ($ldap_client_tls_cert !== '' && $ldap_client_tls_key !== '')
+                        @if (\App\Models\Ldap::saslExternalAvailable())
+                            <x-alert type="info" icon="tip">
+                                {{ trans('admin/settings/general.ldap_wizard.sasl_external_step2_hint') }}
+                            </x-alert>
+                        @else
+                            <x-alert type="warning" icon="warning">
+                                {!! trans('admin/settings/general.ldap_wizard.sasl_external_unavailable_hint') !!}
+                            </x-alert>
+                        @endif
+                    @endif
+
                     <!-- Base Bind DN, placed first so users compose their
                          admin DN with the base DN already visible. -->
                     <x-form.row
                         name="ldap_basedn"
                         :label="trans('admin/settings/general.ldap_basedn')"
                         help_text="{!! trans('admin/settings/general.ldap_wizard.ldap_basedn_help') !!}"
+                        help_class="col-md-7 col-md-offset-3"
                     >
                         <x-slot:input>
                             <x-input.text
@@ -452,6 +500,7 @@
                                 placeholder="{{ trans('general.example').'ou=users,dc=example,dc=com' }}"
                                 :required="true"
                                 :ignore-autofill="true"
+                                :readonly="$isReadOnly"
                             />
                         </x-slot:input>
                     </x-form.row>
@@ -461,16 +510,20 @@
                         name="ldap_uname"
                         :label="trans('admin/settings/general.ldap_uname')"
                         help_html="{!! trans('admin/settings/general.ldap_wizard.ldap_uname_help') !!}"
+                        help_class="col-md-7 col-md-offset-3"
                     >
                         <x-slot:input>
                             {{-- Placeholder swaps based on the step-1 AD flag:
-                                 UPN form for AD, full DN form otherwise. --}}
+                                 UPN form for AD, full DN form otherwise. Not
+                                 required when SASL EXTERNAL is on because
+                                 the bind identity comes from the client cert. --}}
                             <x-input.text
                                 name="ldap_uname"
                                 wire:model.live.debounce.500ms="ldap_uname"
                                 placeholder="{{ trans('general.example').($is_ad ? 'admin@example.com' : 'cn=admin,dc=example,dc=com') }}"
                                 :ignore-autofill="true"
-                                :required="true"
+                                :required="! ($ldap_client_tls_cert !== '' && $ldap_client_tls_key !== '')"
+                                :readonly="$isReadOnly"
                             />
                         </x-slot:input>
                     </x-form.row>
@@ -480,13 +533,15 @@
                         name="ldap_pword"
                         :label="trans('admin/settings/general.ldap_pword')"
                         help_text="{!! trans('admin/settings/general.ldap_wizard.ldap_pword_help') !!}"
+                        help_class="col-md-7 col-md-offset-3"
                     >
                         <x-slot:input>
                             <x-input.password
                                 name="ldap_pword"
                                 wire:model.live.debounce.500ms="ldap_pword"
-                                :required="true"
+                                :required="! ($ldap_client_tls_cert !== '' && $ldap_client_tls_key !== '')"
                                 :ignore-autofill="true"
+                                :readonly="$isReadOnly"
                             />
                         </x-slot:input>
                     </x-form.row>
@@ -496,6 +551,7 @@
                         name="ldap_filter"
                         :label="trans('admin/settings/general.ldap_filter')"
                         help_text="{!! trans('admin/settings/general.ldap_wizard.ldap_filter_help') !!}"
+                        help_class="col-md-7 col-md-offset-3"
                     >
                         <x-slot:input>
                             <x-input.text
@@ -503,6 +559,7 @@
                                 wire:model.live.debounce.500ms="ldap_filter"
                                 placeholder="{{ trans('general.example').'&(cn=*)' }}"
                                 :ignore-autofill="true"
+                                :readonly="$isReadOnly"
                             />
                         </x-slot:input>
                     </x-form.row>
@@ -512,6 +569,7 @@
                         name="ldap_auth_filter_query"
                         :label="trans('admin/settings/general.ldap_auth_filter_query')"
                         help_text="{!! trans('admin/settings/general.ldap_wizard.ldap_auth_filter_query_help') !!}"
+                        help_class="col-md-7 col-md-offset-3"
                     >
                         <x-slot:input>
                             <x-input.text
@@ -520,6 +578,7 @@
                                 placeholder="{{ trans('general.example').'uid=' }}"
                                 :required="true"
                                 :ignore-autofill="true"
+                                :readonly="$isReadOnly"
                             />
                         </x-slot:input>
                     </x-form.row>
@@ -553,6 +612,7 @@
                                     :placeholder="$placeholderExample !== '' ? trans('general.example').$placeholderExample : ''"
                                     :required="$required"
                                     :ignore-autofill="true"
+                                    :readonly="$isReadOnly"
                                 />
                             </x-slot:input>
                         </x-form.row>
@@ -568,6 +628,7 @@
                         :label="trans('admin/settings/general.ldap_invert_active_flag')"
                         :checked="$ldap_invert_active_flag"
                         help_text="{!! trans('admin/settings/general.ldap_invert_active_flag_help') !!}"
+                        :disabled="$isReadOnly"
                     />
 
                     {{-- Sample-lookup section, boxed in an x-well so it
@@ -587,7 +648,7 @@
                         <div class="input-group">
                             <x-input.text
                                 name="test_sample_username"
-                                wire:model.live.debounce.500ms="test_sample_username"
+                                wire:model.live="test_sample_username"
                                 :placeholder="trans('admin/settings/general.ldap_wizard.mapping.sample_username_placeholder')"
                                 :ignore-autofill="true"
                             />
@@ -616,14 +677,21 @@
                              search box where results would appear. --}}
                         <x-form.error name="test_sample_username" />
 
-                        {{-- Lookup-success alert lives inside the well
-                             so it sits with the search box and the
-                             preview table it introduces. Infrastructure
-                             errors (connect/bind failures) still surface
-                             at the top of the panel because they suggest
-                             going back to earlier steps. --}}
-                        @if ($testStatus === 'success')
-                            <x-alert type="success" role="status" icon="checkmark" style="margin-top: 15px;">
+                        {{-- Test-lookup alerts live inside the well so
+                             they sit with the search box and the preview
+                             table. Success renders green with the checkmark
+                             icon, everything else renders red with the
+                             warning icon. Bind and connect failures include
+                             their own "Go back to <step> step" language in
+                             the trans string, so the user still gets that
+                             cue without needing a top-of-panel banner. --}}
+                        @if ($testStatus)
+                            <x-alert
+                                :type="$testStatus === 'success' ? 'success' : 'danger'"
+                                :role="$testStatus === 'success' ? 'status' : 'alert'"
+                                :icon="$testStatus === 'success' ? 'checkmark' : 'warning'"
+                                style="margin-top: 15px;"
+                            >
                                 {!! $testMessage !!}
                             </x-alert>
                         @endif
@@ -646,7 +714,7 @@
                                 <tbody>
                                     @foreach ($step3TestAttributes as $snipeField => $preview)
                                         <tr>
-                                            <td>{{ $snipeField }}</td>
+                                            <td>{{ $preview['label'] ?? $snipeField }}</td>
                                             <td>
                                                 @if ($preview['attr'])
                                                     <code>{{ $preview['attr'] }}</code>
@@ -683,6 +751,7 @@
                         :label="trans('admin/settings/general.ldap_wizard.sync.ldap_pw_sync_label')"
                         :checked="$ldap_pw_sync"
                         help_text="{!! trans('admin/settings/general.ldap_pw_sync_help') !!}"
+                        :disabled="$isReadOnly"
                     />
 
                     <!-- Default permissions group -->
@@ -701,6 +770,7 @@
                                 ] + $this->permissionGroups"
                                 :forLivewire="true"
                                 style="width: 100%"
+                                :disabled="$isReadOnly"
                             />
                         </x-slot:input>
                     </x-form.row>
@@ -717,6 +787,7 @@
                                 name="custom_forgot_pass_url"
                                 wire:model.blur="custom_forgot_pass_url"
                                 placeholder="{{ trans('general.example').'https://my.ldapserver-forgotpass.com' }}"
+                                :readonly="$isReadOnly"
                             />
                         </x-slot:input>
                     </x-form.row>
@@ -733,15 +804,171 @@
                         <h2>{{ trans('admin/settings/general.ldap_wizard.done.subtitle') }}</h2>
                         <p>{{ trans('admin/settings/general.ldap_wizard.done.intro') }}</p>
                         <p>{{ trans('admin/settings/general.ldap_wizard.done.sync_intro') }}</p>
-                        <br><br>
 
-                        <br><br><br><br><br>
+                        {{-- Persisted-config summary, grouped by wizard
+                             step with an "Edit" button that jumps back
+                             to that step. Sensitive fields (bind
+                             password, TLS client key) are shown as a
+                             set/not-set indicator rather than the
+                             actual value. Empty fields are hidden. --}}
+                        @php
+                            // Group field keys by the wizard step they
+                            // live on. Kept as an inline map so the
+                            // summary stays self-contained; if steps
+                            // move fields around, only this array needs
+                            // to update (plus the corresponding form
+                            // sections above, of course).
+                            $summaryGroups = [
+                                1 => [
+                                    'title' => trans('admin/settings/general.ldap_wizard.step_connection'),
+                                    'fields' => [
+                                        'ldap_server' => trans('admin/settings/general.ldap_server'),
+                                        'ldap_tls' => trans('admin/settings/general.ldap_tls'),
+                                        'ldap_server_cert_ignore' => trans('admin/settings/general.ldap_server_cert_ignore'),
+                                        'is_ad' => trans('admin/settings/general.is_ad'),
+                                        'ad_domain' => trans('admin/settings/general.ad_domain'),
+                                    ],
+                                ],
+                                2 => [
+                                    'title' => trans('admin/settings/general.ldap_wizard.step_authscope'),
+                                    'fields' => [
+                                        'ldap_uname' => trans('admin/settings/general.ldap_uname'),
+                                        'ldap_pword' => trans('admin/settings/general.ldap_pword'),
+                                        'ldap_basedn' => trans('admin/settings/general.ldap_basedn'),
+                                        'ldap_filter' => trans('admin/settings/general.ldap_filter'),
+                                        'ldap_auth_filter_query' => trans('admin/settings/general.ldap_auth_filter_query'),
+                                    ],
+                                ],
+                                3 => [
+                                    'title' => trans('admin/settings/general.ldap_wizard.step_mapping'),
+                                    'fields' => [
+                                        'ldap_username_field' => trans('admin/settings/general.ldap_username_field'),
+                                        'ldap_fname_field' => trans('admin/settings/general.ldap_fname_field'),
+                                        'ldap_lname_field' => trans('admin/settings/general.ldap_lname_field'),
+                                        'ldap_display_name' => trans('admin/settings/general.ldap_display_name'),
+                                        'ldap_email' => trans('admin/settings/general.ldap_email'),
+                                        'ldap_emp_num' => trans('admin/settings/general.ldap_emp_num'),
+                                        'ldap_phone_field' => trans('admin/settings/general.ldap_phone'),
+                                        'ldap_mobile' => trans('admin/settings/general.ldap_mobile'),
+                                        'ldap_jobtitle' => trans('admin/settings/general.ldap_jobtitle'),
+                                        'ldap_manager' => trans('admin/settings/general.ldap_manager'),
+                                        'ldap_dept' => trans('admin/settings/general.ldap_dept'),
+                                        'ldap_location' => trans('admin/settings/general.ldap_location'),
+                                        'ldap_active_flag' => trans('admin/settings/general.ldap_active_flag'),
+                                        'ldap_invert_active_flag' => trans('admin/settings/general.ldap_invert_active_flag'),
+                                    ],
+                                ],
+                                4 => [
+                                    'title' => trans('admin/settings/general.ldap_wizard.step_sync'),
+                                    'fields' => [
+                                        'ldap_pw_sync' => trans('admin/settings/general.ldap_pw_sync'),
+                                        'ldap_default_group' => trans('admin/settings/general.ldap_default_group'),
+                                        'custom_forgot_pass_url' => trans('admin/settings/general.custom_forgot_pass_url'),
+                                    ],
+                                ],
+                            ];
+                            // Bind password and TLS client key/cert are
+                            // never rendered as their raw persisted
+                            // value in the summary - show only whether
+                            // they are set. Keeps sensitive material off
+                            // any incidental screenshot/screen-share.
+                            $summarySecretFields = ['ldap_pword', 'ldap_client_tls_key', 'ldap_client_tls_cert'];
+                        @endphp
+
+                        <h3 style="margin-top: 30px;">{{ trans('admin/settings/general.ldap_wizard.done.summary_heading') }}</h3>
+
+                        @foreach ($summaryGroups as $stepNum => $group)
+                            <div style="margin-top: 25px; padding-top: 15px; border-top: 1px solid var(--box-border-color, #f4f4f4);">
+                                <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 15px;">
+                                    <h4>{{ $stepNum }}. {{ $group['title'] }}</h4>
+                                    <button
+                                        type="button"
+                                        wire:click="goToStep({{ $stepNum }})"
+                                        class="btn btn-sm btn-theme"
+                                    >
+                                        <x-icon type="edit"/> {{ trans('button.edit') }}
+                                    </button>
+                                </div>
+                                <x-page-data>
+                                    @foreach ($group['fields'] as $field => $label)
+                                        @php
+                                            $value = $this->{$field} ?? null;
+                                            // Booleans always render (yes/no
+                                            // is meaningful); everything else
+                                            // (secrets included) hides when
+                                            // unset so the summary stays
+                                            // focused on what the admin
+                                            // actually configured.
+                                            $isBool = is_bool($value);
+                                            $isSecret = in_array($field, $summarySecretFields, true);
+
+                                            // ldap_pword deliberately stays '' on
+                                            // the component (never round-tripped
+                                            // to the browser). Check the persisted
+                                            // row via the computed helper so a
+                                            // stored password renders as masked
+                                            // asterisks instead of being hidden.
+                                            $secretIsSet = $isSecret
+                                                ? ($field === 'ldap_pword'
+                                                    ? $this->hasPersistedLdapPword
+                                                    : ($value !== null && $value !== ''))
+                                                : false;
+
+                                            if ($isSecret && ! $secretIsSet) {
+                                                continue;
+                                            }
+                                            if (! $isBool && ! $isSecret && ($value === null || $value === '')) {
+                                                continue;
+                                            }
+                                            if ($field === 'ldap_default_group' && $value !== null && $value !== '') {
+                                                // Resolve the id to the group name for readability.
+                                                $group_name = \App\Models\Group::find($value)?->name;
+                                                $displayValue = $group_name ?? trans('general.unknown');
+                                            } elseif ($isBool) {
+                                                $displayValue = $value
+                                                    ? trans('general.yes')
+                                                    : trans('general.no');
+                                            } elseif ($isSecret) {
+                                                // Show masked asterisks when a
+                                                // value is stored so operators
+                                                // can see the credential IS set,
+                                                // without ever surfacing the
+                                                // actual value.
+                                                $displayValue = '************';
+                                            } else {
+                                                $displayValue = $value;
+                                            }
+                                        @endphp
+                                        {{-- Boolean rows render icon + label
+                                             for scan-ability; secret rows
+                                             skip copy_what so the masked
+                                             asterisks aren't offered as
+                                             clipboard content. Everything
+                                             else uses the standard
+                                             copy-to-clipboard treatment so
+                                             admins can grab the value the
+                                             same way the hardware view lets
+                                             them copy asset details. --}}
+                                        @if ($isBool)
+                                            <x-data-row :label="$label">
+                                                <x-icon type="{{ $value ? 'checkmark' : 'x' }}" class="fa-fw {{ $value ? 'text-success' : 'text-danger' }}"/>
+                                                {{ $displayValue }}
+                                            </x-data-row>
+                                        @elseif ($isSecret)
+                                            <x-data-row :label="$label">
+                                                <code>{{ $displayValue }}</code>
+                                            </x-data-row>
+                                        @else
+                                            <x-data-row :label="$label" copy_what="{{ $field }}">
+                                                <code>{{ $displayValue }}</code>
+                                            </x-data-row>
+                                        @endif
+                                    @endforeach
+                                </x-page-data>
+                            </div>
+                        @endforeach
                     </div>
 
-                @else
-                    <x-alert type="info" role="status">
-                        {{ trans('admin/settings/general.ldap_wizard.placeholder') }}
-                    </x-alert>
                 @endif
 
             </div>
@@ -762,7 +989,6 @@
                     <strong>{{ trans('admin/settings/general.ldap_wizard.verifying_help') }}</strong>
                 </p>
 
-                <x-demo-lock>{{ trans('general.feature_disabled') }}</x-demo-lock>
             </div>
             </div>
 
@@ -789,7 +1015,7 @@
                         wire:loading.attr="disabled"
                         wire:target="saveAndAdvance"
                         class="btn btn-primary"
-                        @disabled(config('app.lock_passwords') || ! $this->canAdvance)
+                        @disabled(! config('app.lock_passwords') && ! $this->canAdvance)
                     >
                         <span wire:loading.remove wire:target="saveAndAdvance">
                             @if ($currentStep === 4)
