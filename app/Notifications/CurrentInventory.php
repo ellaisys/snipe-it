@@ -2,11 +2,14 @@
 
 namespace App\Notifications;
 
+use App\Models\User;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
+use Symfony\Component\Mime\Email;
 
-class CurrentInventory extends Notification
+class CurrentInventory extends Notification implements ShouldQueue
 {
     use Queueable;
 
@@ -15,9 +18,10 @@ class CurrentInventory extends Notification
      *
      * @return void
      */
-    public function __construct($user)
+    public function __construct(
+        public User $user
+    )
     {
-        $this->user = $user;
     }
 
     /**
@@ -26,7 +30,7 @@ class CurrentInventory extends Notification
      * @param  mixed  $notifiable
      * @return array
      */
-    public function via($notifiable)
+    public function via()
     {
         return ['mail'];
     }
@@ -34,32 +38,24 @@ class CurrentInventory extends Notification
     /**
      * Get the mail representation of the notification.
      *
-     * @param  mixed  $notifiable
-     * @return \Illuminate\Notifications\Messages\MailMessage
+     * @return MailMessage
      */
-    public function toMail($notifiable)
+    public function toMail()
     {
         $message = (new MailMessage)->markdown('notifications.markdown.user-inventory',
             [
-                'assets'  => $this->user->assets,
-                'accessories'  => $this->user->accessories,
-                'licenses'  => $this->user->licenses,
+                'assets' => $this->user->assets,
+                'accessories' => $this->user->accessories,
+                'licenses' => $this->user->licenses,
+                'consumables' => $this->user->consumables,
             ])
-            ->subject('Inventory Report');
+            ->subject(trans('mail.inventory_report'))
+            ->withSymfonyMessage(function (Email $message) {
+                $message->getHeaders()->addTextHeader(
+                    'X-System-Sender', 'Snipe-IT'
+                );
+            });
 
         return $message;
-    }
-
-    /**
-     * Get the array representation of the notification.
-     *
-     * @param  mixed  $notifiable
-     * @return array
-     */
-    public function toArray($notifiable)
-    {
-        return [
-            //
-        ];
     }
 }

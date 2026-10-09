@@ -8,6 +8,32 @@
     @parent
 @stop
 
+@section('header_right')
+
+    <div class="btn-toolbar" role="toolbar">
+        <div class="btn-group mr-2" role="group">
+            @if($showDeleted)
+                <a href="{{ route('reports/unaccepted_assets') }}" class="btn btn-default" ><i class="fa fa-trash icon-white" aria-hidden="true"></i> {{ trans('general.hide_deleted') }}</a>
+            @else
+                <a href="{{ route('reports/unaccepted_assets', ['deleted' => 'deleted']) }}" class="btn btn-default" ><i class="fa fa-trash icon-white" aria-hidden="true"></i> {{ trans('general.show_deleted') }}</a>
+            @endif
+        </div>
+        {{-- CSV export still gated on reports.view: getAssetAcceptanceReport()
+             widens read access so dashboard "Unaccepted acceptances" widget
+             viewers land on the report without a 403, but postAssetAcceptanceReport
+             (the export target) still runs the admin-shaped authorize check
+             so the download button only surfaces for reports.view holders. --}}
+        @if ($canManageAcceptances)
+            <div class="btn-group mr-2" role="group">
+                <form method="POST" action="{{ route('reports/export/unaccepted_assets') }}" accept-charset="UTF-8" class="form-horizontal">
+                {{csrf_field()}}
+                <button type="submit" class="btn btn-default"><i class="fa fa-download icon-white" aria-hidden="true"></i> {{ trans('general.download_all') }}</button>
+                </form>
+            </div>
+        @endif
+    </div>
+@stop
+
 {{-- Page content --}}
 @section('content')
 
@@ -15,20 +41,14 @@
   <div class="col-md-12">
     <div class="box box-default">
       <div class="box-body">
-        <div class="table-responsive">
-
             <table
                 data-cookie-id-table="unacceptedAssetsReport"
-                data-pagination="true"
                 data-id-table="unacceptedAssetsReport"
-                data-search="true"
                 data-side-pagination="client"
-                data-show-columns="true"
-                data-show-export="true"
-                data-show-refresh="true"
                 data-sort-order="asc"
+                data-sort-name="created_at"
+                data-advanced-search="false"
                 id="unacceptedAssetsReport"
-                data-url="{{route('api.maintenances.index') }}"
                 class="table table-striped snipe-table"
                 data-export-options='{
                     "fileName": "maintenance-report-{{ date('Y-m-d') }}",
@@ -36,28 +56,89 @@
                     }'>
             <thead>
               <tr role="row">
-                <th class="col-sm-1">{{ trans('admin/companies/table.title') }}</th>
-                <th class="col-sm-1">{{ trans('general.category') }}</th>
-                <th class="col-sm-1">{{ trans('admin/hardware/form.model') }}</th>
-                <th class="col-sm-1">{{ trans('admin/hardware/form.name') }}</th>
-                <th class="col-sm-1">{{ trans('admin/hardware/table.asset_tag') }}</th>
-                <th class="col-sm-1">{{ trans('admin/hardware/table.checkoutto') }}</th>
+                <th scope="col" class="col-sm-1" data-field="created_at" data-searchable="false" data-sortable="true">{{ trans('general.date') }}</th>
+                <th scope="col" class="col-sm-1" data-sortable="true" >{{ trans('general.type') }}</th>
+                <th scope="col" class="col-sm-1" data-sortable="true" >{{ trans('admin/companies/table.title') }}</th>
+                <th scope="col" class="col-sm-1" data-sortable="true" >{{ trans('general.category') }}</th>
+                <th scope="col" class="col-sm-1" data-sortable="true" >{{ trans('admin/hardware/form.model') }}</th>
+                <th scope="col" class="col-sm-1" data-sortable="true" >{{ trans('general.name') }}</th>
+                <th scope="col" class="col-sm-1" data-sortable="true" >{{ trans('admin/hardware/table.asset_tag') }}</th>
+                <th scope="col" class="col-sm-1" data-sortable="true" >{{ trans('admin/hardware/table.checkoutto') }}</th>
+                @if ($canManageAcceptances)
+                    <th scope="col" class="col-md-1"><span class="line"></span>{{ trans('table.actions') }}</th>
+                @endif
               </tr>
             </thead>
             <tbody>
-              @if ($assetsForReport)
-              @foreach ($assetsForReport as $assetItem)
-                  @if ($assetItem)
-                  <tr>
-                    <td>{{ ($assetItem->company) ? $assetItem->company->nam : '' }}</td>
-                    <td>{{ $assetItem->model->category->name }}</td>
-                    <td>{{ $assetItem->model->name }}</td>
-                    <td>{!! $assetItem->present()->nameUrl() !!}</td>
-                    <td>{{ $assetItem->asset_tag }}</td>
-                    <td>{!! ($assetItem->assignedTo) ? $assetItem->assignedTo->present()->nameUrl() : 'Deleted user' !!}</td>
-                  </tr>
-                  @endif
-              @endforeach
+              @if ($itemsForReport)
+                  @foreach ($itemsForReport as $item)
+                      <tr @if($item->acceptance->trashed()) style="text-decoration: line-through" @endif>
+                          {{-- Created date --}}
+                          <td>
+                              {{ Helper::getFormattedDateObject($item->acceptance->created_at, 'datetime', false) }}
+                          </td>
+                          {{-- Item Type --}}
+                          <td>{{ $item->type }}</td>
+                          {{-- Company name --}}
+                          <td>{{ $item->plain_text_company }}</td>
+
+                          {{-- Category --}}
+                          <td>{{ $item->plain_text_category }}</td>
+
+                          {{-- Model --}}
+                          <td>{{ $item->plain_text_model }}</td>
+
+                          {{-- Name --}}
+                          <td>{{ $item->plain_text_name }}</td>
+
+                          {{-- Asset tag or blank --}}
+                          <td>{{ $item->asset_tag }}</td>
+
+                          {{-- Assigned To (with soft-delete strike if needed) --}}
+                          <td @if(!$item->assignee || (method_exists($item->assignee, 'trashed') && $item->assignee->trashed())) style="text-decoration: line-through" @endif>
+                              {!! $item->assignee
+                                  ? optional($item->assignee->present())->nameUrl() ?? e($item->assignee->name)
+                                  : trans('admin/reports/general.deleted_user') !!}
+                          </td>
+
+                          {{-- Actions: send reminder / delete. Gate matches the
+                               column header above and the CSV export button in
+                               the page header, so a scoped viewer arriving via
+                               the Needs Attention widget sees a read-only report
+                               and doesn't get a dead Actions column full of
+                               buttons that would 403 on submit. --}}
+                          @if ($canManageAcceptances)
+                              <td class="text-nowrap">
+                                      @unless($item->acceptance->trashed())
+                                          <form method="post" class="white-space: nowrap;" action="{{ route('reports/unaccepted_assets_sent_reminder') }}">
+                                              @csrf
+                                              <input type="hidden" name="acceptance_id" value="{{ $item->acceptance_id }}">
+                                              @if ($item->assignee && $item->assignee->email)
+                                                  <button class="btn btn-sm btn-warning" data-tooltip="true" data-title="{{ trans('admin/reports/general.send_reminder') }}">
+                                                      <i class="fa fa-repeat" aria-hidden="true"></i>
+                                                  </button>
+                                              @else
+                                                  <span data-tooltip="true" data-title="{{ trans('admin/reports/general.cannot_send_reminder') }}">
+                                                      <a class="btn btn-sm btn-warning disabled" href="#">
+                                                            <i class="fa fa-repeat" aria-hidden="true"></i>
+                                                      </a>
+                                                  </span>
+                                              @endif
+                                              <a href="{{ route('reports/unaccepted_assets_delete', ['acceptanceId' => $item->acceptance_id]) }}"
+                                                 class="btn btn-sm btn-danger delete-asset"
+                                                 data-tooltip="true"
+                                                 data-toggle="modal"
+                                                 data-content="{{ trans('general.delete_confirm', ['item' => trans('admin/reports/general.acceptance_request')]) }}"
+                                                 data-title="{{ trans('general.delete') }}"
+                                                 onClick="return false;">
+                                                  <i class="fa fa-trash"></i>
+                                              </a>
+                                          </form>
+                                      @endunless
+                              </td>
+                          @endif
+                      </tr>
+                  @endforeach
               @endif
             </tbody>
             <tfoot>
@@ -65,7 +146,6 @@
               </tr>
             </tfoot>
           </table>
-        </div>
       </div>
     </div>
   </div>

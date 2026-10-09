@@ -2,28 +2,58 @@
 
 namespace App\Models;
 
+use App\Enums\FileStorage;
 use App\Http\Traits\UniqueUndeletedTrait;
+use App\Models\Traits\CompanyableTrait;
+use App\Models\Traits\HasUploads;
+use App\Models\Traits\Loggable;
 use App\Models\Traits\Searchable;
+use App\Presenters\DepartmentPresenter;
+use App\Presenters\Presentable;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Watson\Validating\ValidatingTrait;
 
 class Department extends SnipeModel
 {
+    use CompanyableTrait;
+    use HasFactory;
+    use HasUploads;
+    use Loggable;
+    use SoftDeletes;
+
     /**
      * Whether the model should inject it's identifier to the unique
      * validation rules before attempting validation. If this property
      * is not set in the model it will default to true.
      *
-     * @var boolean
+     * @var bool
      */
     protected $injectUniqueIdentifier = true;
 
-    use ValidatingTrait, UniqueUndeletedTrait;
+    protected $presenter = DepartmentPresenter::class;
+
+    use Presentable, UniqueUndeletedTrait, ValidatingTrait;
+
+    protected $casts = [
+        'manager_id' => 'integer',
+        'location_id' => 'integer',
+        'company_id' => 'integer',
+    ];
 
     protected $rules = [
-        'name'                  => 'required|max:255',
-        'location_id'           => 'numeric|nullable',
-        'company_id'            => 'numeric|nullable',
-        'manager_id'            => 'numeric|nullable',
+        'name' => 'required|string|max:255|is_unique_across_company_and_location:departments,name',
+        'location_id' => 'numeric|nullable|exists:locations,id',
+        'company_id' => 'numeric|nullable|exists:companies,id|fmcs_company',
+        'manager_id' => 'numeric|nullable|exists:users,id',
+        'phone' => 'string|max:255|nullable',
+        'fax' => 'string|max:255|nullable',
+        'notes' => 'string|max:255|nullable',
     ];
 
     /**
@@ -32,87 +62,141 @@ class Department extends SnipeModel
      * @var array
      */
     protected $fillable = [
-        'user_id',
+        'created_by',
         'name',
+        'phone',
+        'fax',
         'location_id',
         'company_id',
         'manager_id',
+        'tag_color',
         'notes',
     ];
 
     use Searchable;
-    
+
     /**
      * The attributes that should be included when searching the model.
-     * 
+     *
      * @var array
      */
-    protected $searchableAttributes = ['name', 'notes'];
+    protected $searchableAttributes = [
+        'name',
+        'notes',
+        'phone',
+        'fax',
+    ];
 
     /**
      * The relations and their attributes that should be included when searching the model.
-     * 
+     *
      * @var array
      */
-    protected $searchableRelations = [];
+    protected $searchableRelations = [
+        'adminuser' => ['first_name', 'last_name', 'display_name'],
+        'company' => ['name'],
+        'location' => ['name'],
+        'manager' => ['first_name', 'last_name', 'display_name'],
+    ];
+
+    /**
+     * On hard-delete, wipe the image file and Files-tab attachments.
+     * Soft-delete leaves everything alone so a restore comes back with
+     * the image + files intact. The attachment action_log rows get
+     * soft-deleted (not hard-deleted) so the audit trail of what was
+     * attached-and-when survives even after the parent is gone.
+     */
+    protected static function booted(): void
+    {
+        static::forceDeleted(function (self $department) {
+            if ($department->image) {
+                try {
+                    Storage::disk('public')->delete(FileStorage::Departments->publicPath().$department->image);
+                } catch (\Exception $e) {
+                    Log::info($e->getMessage());
+                }
+            }
+
+            foreach ($department->uploads as $upload) {
+                if (($path = $upload->uploads_file_path()) !== null) {
+                    try {
+                        Storage::delete($path);
+                    } catch (\Exception $e) {
+                        Log::info($e->getMessage());
+                    }
+                }
+                $upload->delete();
+            }
+        });
+    }
+
+    public function isDeletable()
+    {
+        return Gate::allows('delete', $this) && (($this->users_count ?? $this->users()->count()) === 0);
+    }
 
     /**
      * Establishes the department -> company relationship
      *
      * @author A. Gianotto <snipe@snipe.net>
-     * @since [v4.0]
-     * @return \Illuminate\Database\Eloquent\Relations\Relation
+     *
+     * @since  [v4.0]
+     *
+     * @return Relation
      */
     public function company()
     {
-        return $this->belongsTo('\App\Models\Company', 'company_id');
+        return $this->belongsTo(Company::class, 'company_id');
     }
-
 
     /**
      * Establishes the department -> users relationship
      *
      * @author A. Gianotto <snipe@snipe.net>
-     * @since [v4.0]
-     * @return \Illuminate\Database\Eloquent\Relations\Relation
+     *
+     * @since  [v4.0]
+     *
+     * @return Relation
      */
     public function users()
     {
-        return $this->hasMany('\App\Models\User', 'department_id');
+        return $this->hasMany(User::class, 'department_id');
     }
-
 
     /**
      * Establishes the department -> manager relationship
      *
      * @author A. Gianotto <snipe@snipe.net>
-     * @since [v4.0]
-     * @return \Illuminate\Database\Eloquent\Relations\Relation
+     *
+     * @since  [v4.0]
+     *
+     * @return Relation
      */
     public function manager()
     {
-        return $this->belongsTo('\App\Models\User', 'manager_id');
+        return $this->belongsTo(User::class, 'manager_id');
     }
 
     /**
      * Establishes the department -> location relationship
      *
      * @author A. Gianotto <snipe@snipe.net>
-     * @since [v4.0]
-     * @return \Illuminate\Database\Eloquent\Relations\Relation
+     *
+     * @since  [v4.0]
+     *
+     * @return Relation
      */
     public function location()
     {
-        return $this->belongsTo('\App\Models\Location', 'location_id');
+        return $this->belongsTo(Location::class, 'location_id');
     }
-    
+
     /**
      * Query builder scope to order on location name
      *
-     * @param  \Illuminate\Database\Query\Builder  $query  Query builder instance
-     * @param  text                              $order       Order
-     *
-     * @return \Illuminate\Database\Query\Builder          Modified query builder
+     * @param  Builder  $query  Query builder instance
+     * @param  text  $order  Order
+     * @return Builder Modified query builder
      */
     public function scopeOrderLocation($query, $order)
     {
@@ -122,15 +206,29 @@ class Department extends SnipeModel
     /**
      * Query builder scope to order on manager name
      *
-     * @param  \Illuminate\Database\Query\Builder  $query  Query builder instance
-     * @param  text                              $order       Order
-     *
-     * @return \Illuminate\Database\Query\Builder          Modified query builder
+     * @param  Builder  $query  Query builder instance
+     * @param  text  $order  Order
+     * @return Builder Modified query builder
      */
     public function scopeOrderManager($query, $order)
     {
         return $query->leftJoin('users as department_user', 'departments.manager_id', '=', 'department_user.id')->orderBy('department_user.first_name', $order)->orderBy('department_user.last_name', $order);
     }
 
+    /**
+     * Query builder scope to order on company
+     *
+     * @param  Builder  $query  Query builder instance
+     * @param  text  $order  Order
+     * @return Builder Modified query builder
+     */
+    public function scopeOrderCompany($query, $order)
+    {
+        return $query->leftJoin('companies as company_sort', 'departments.company_id', '=', 'company_sort.id')->orderBy('company_sort.name', $order);
+    }
 
+    public function scopeOrderByCreatedBy($query, $order)
+    {
+        return $query->leftJoin('users as admin_sort', 'departments.created_by', '=', 'admin_sort.id')->select('departments.*')->orderBy('admin_sort.first_name', $order)->orderBy('admin_sort.last_name', $order);
+    }
 }
